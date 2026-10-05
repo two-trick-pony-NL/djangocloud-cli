@@ -1,7 +1,7 @@
 """Where the CLI keeps its API token, and how it finds one.
 
 Order: the DJANGOCLOUD_TOKEN environment variable (CI), then the credentials file written by
-`cloud login`. The token is a bearer secret, so the file is created readable by its owner only.
+`djangocloud login`. The token is a bearer secret, so the file is created readable by its owner only.
 """
 
 import json

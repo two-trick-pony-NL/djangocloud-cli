@@ -1,14 +1,14 @@
 [project]
 name = "djangocloud-cli"
 version = "0.0.1"
-description = "Deploy a Django app from the command line: cloud login, cloud deploy, cloud logs."
+description = "Deploy a Django app from the command line: djangocloud login, djangocloud deploy, djangocloud logs."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["rich>=13", "questionary>=2.0"]
 classifiers = ["Framework :: Django", "Programming Language :: Python :: 3"]
 
 [project.scripts]
-cloud = "djangocloud_cli.cli:main"
+djangocloud = "djangocloud_cli.cli:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -1,4 +1,4 @@
-"""`cloud login`: the device-code flow. No passwords or keys are typed into the terminal."""
+"""`djangocloud login`: the device-code flow. No passwords or keys are typed into the terminal."""
 
 import time
 import webbrowser
@@ -34,4 +34,4 @@ def login(client: Client, *, sleep=time.sleep, open_browser=webbrowser.open, cli
             config.save_token(token)
             client.token = token
             return token
-    raise ApiError(400, "expired_token", "That login expired. Run 'cloud login' again.")
+    raise ApiError(400, "expired_token", "That login expired. Run 'djangocloud login' again.")

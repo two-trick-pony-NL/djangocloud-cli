@@ -1,4 +1,4 @@
-"""`cloud` command: one parser shared by the standalone script and `manage.py cloud`."""
+"""`djangocloud` command: one parser shared by the standalone script and `manage.py djangocloud`."""
 
 import argparse
 import sys
@@ -7,10 +7,10 @@ from . import __version__, auth, config, link
 from .api import ApiError, Client
 from .ui import NotInteractive, confirm, console, err, interactive, no_input, select, set_no_input, text
 
-COMING_SOON = "'cloud {name}' isn't available yet: the build and deploy pipeline is still being built."
+COMING_SOON = "'djangocloud {name}' isn't available yet: the build and deploy pipeline is still being built."
 
 
-def build_parser(prog: str = "cloud") -> argparse.ArgumentParser:
+def build_parser(prog: str = "djangocloud") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog, description="Deploy your Django app.")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(
@@ -67,7 +67,7 @@ def ensure_login(client: Client) -> None:
     if not interactive():
         raise CliError(
             "Not signed in. In CI set DJANGOCLOUD_TOKEN (create one at /dashboard/cli/); "
-            "on your own machine run 'cloud login'."
+            "on your own machine run 'djangocloud login'."
         )
     console.print("You're not signed in yet.")
     auth.login(client)
@@ -127,7 +127,7 @@ def create_project(client: Client, root, args) -> dict:
 
 def cmd_login(args, root) -> int:
     if not interactive():
-        raise CliError("'cloud login' needs a browser. In CI use a DJANGOCLOUD_TOKEN instead.")
+        raise CliError("'djangocloud login' needs a browser. In CI use a DJANGOCLOUD_TOKEN instead.")
     client = make_client()
     auth.login(client)
     console.print(f"[green]✓[/green] Signed in as {client.get('/me')['email']}")
@@ -137,14 +137,14 @@ def cmd_login(args, root) -> int:
 def cmd_whoami(args, root) -> int:
     client = make_client()
     if not client.token:
-        console.print("Not signed in. Run [bold]cloud login[/bold].")
+        console.print("Not signed in. Run [bold]djangocloud login[/bold].")
         return 1
     try:
         me = client.get("/me")
     except ApiError as exc:
         if exc.code != "unauthorized":
             raise
-        console.print("Your token is no longer valid. Run [bold]cloud login[/bold].")
+        console.print("Your token is no longer valid. Run [bold]djangocloud login[/bold].")
         return 1
     console.print(f"Signed in as [bold]{me['email']}[/bold]")
     linked = link.load(root)
@@ -189,7 +189,7 @@ COMMANDS = {
 }
 
 
-def run(argv: list[str] | None = None, prog: str = "cloud") -> int:
+def run(argv: list[str] | None = None, prog: str = "djangocloud") -> int:
     parser = build_parser(prog)
     args = parser.parse_args(argv)
     set_no_input(getattr(args, "no_input", False))
