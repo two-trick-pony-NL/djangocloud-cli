@@ -8,3 +8,4 @@ build/
 .ruff_cache/
 .env
 *.pem
+src/djangocloud_cli/_version.py

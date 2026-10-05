@@ -1,6 +1,6 @@
 [project]
 name = "djangocloud-cli"
-version = "0.1.1"
+dynamic = ["version"]  # from the git tag (hatch-vcs): tag v0.2.0 -> version 0.2.0
 description = "Deploy a Django app from the command line: djangocloud login, djangocloud deploy, djangocloud logs."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -36,8 +36,14 @@ Issues = "https://github.com/two-trick-pony-NL/djangocloud-cli/issues"
 djangocloud = "djangocloud_cli.cli:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/djangocloud_cli/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/djangocloud_cli"]

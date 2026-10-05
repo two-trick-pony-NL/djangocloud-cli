@@ -15,6 +15,17 @@ jobs:
       id-token: write  # trusted publishing
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the version is read from git tags
       - uses: astral-sh/setup-uv@v5
       - run: uv build
+      - name: Built version must match the release tag
+        run: |
+          set -euo pipefail
+          expected="${GITHUB_REF_NAME#v}"
+          built=$(ls dist/*.whl | sed -E 's#.*/[^-]+-([^-]+)-.*#\1#')
+          if [ "$built" != "$expected" ]; then
+            echo "::error::Built version $built does not match tag ${GITHUB_REF_NAME}"
+            exit 1
+          fi
       - uses: pypa/gh-action-pypi-publish@release/v1
