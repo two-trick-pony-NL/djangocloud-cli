@@ -9,7 +9,7 @@ import os
 import stat
 from pathlib import Path
 
-TOKEN_ENV = "DJANGOCLOUD_TOKEN"
+TOKEN_ENV = "DJANGOCLOUD_TOKEN"  # noqa: S105 - the name of an environment variable, not a secret
 API_ENV = "DJANGOCLOUD_API"
 DEFAULT_API = "https://djangocloud.dev/api/v1"
 
@@ -40,7 +40,7 @@ def save_token(token: str) -> Path:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
     with os.fdopen(fd, "w") as handle:
         json.dump({"token": token}, handle)
-    os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+    path.chmod(stat.S_IRUSR | stat.S_IWUSR)
     return path
 
 

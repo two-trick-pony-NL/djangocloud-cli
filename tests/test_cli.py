@@ -103,10 +103,10 @@ def test_logout_forgets_the_token(api):
 def test_deploy_creates_and_links_a_project_non_interactively(api, tmp_path, capsys):
     config.save_token(api.token)
     code = cli.run(["deploy", "--name", "My Shop", "--size", "micro", "--yes"])
-    assert code == 2  # linked, but the pipeline isn't built yet
+    assert code == 1  # linked, but there's no WSGI app to detect in this bare folder
     assert api.projects[0]["power"] == "micro"
     assert link.load(tmp_path)["slug"] == "my-shop"
-    assert "isn't available yet" in capsys.readouterr().err
+    assert "--wsgi-module" in capsys.readouterr().err
 
 
 def test_linked_folder_skips_all_prompts(api, tmp_path):
@@ -166,8 +166,9 @@ def test_no_input_with_a_token_and_a_project_flag_runs_without_any_prompt(api, t
     monkeypatch.setenv(config.TOKEN_ENV, api.token)
     api.projects.append({"id": 9, "slug": "blog", "name": "Blog", "power": "nano"})
     monkeypatch.setattr("builtins.input", lambda *a: pytest.fail("prompted"))
-    code = cli.run(["--no-input", "deploy", "--project", "blog"])
-    assert code == 2 and link.load(tmp_path)["slug"] == "blog"  # linked; pipeline still pending
+    code = cli.run(["--no-input", "deploy", "--project", "blog", "--wsgi-module", "config.wsgi:application"])
+    assert link.load(tmp_path)["slug"] == "blog"
+    assert code == 1  # linked, but there is nothing to build from (no requirements.txt)
 
 
 def test_no_input_never_starts_a_browser_login(api, capsys):
@@ -183,10 +184,13 @@ def test_no_input_cannot_prompt_for_a_missing_project(api, monkeypatch, capsys):
     assert "--project" in capsys.readouterr().err
 
 
-def test_no_input_can_create_a_project_when_fully_specified(api, monkeypatch, tmp_path):
+def test_no_input_can_create_a_project_and_deploy_it_when_fully_specified(api, monkeypatch, tmp_path):
     monkeypatch.setenv(config.TOKEN_ENV, api.token)
-    assert cli.run(["--no-input", "deploy", "--name", "CI Shop", "--size", "nano"]) == 2
-    assert api.projects[0]["slug"] == "ci-shop"
+    monkeypatch.setattr(cli, "_sleep", lambda s: None)
+    (tmp_path / "requirements.txt").write_text("django\n")
+    args = ["--no-input", "deploy", "--name", "CI Shop", "--size", "nano", "--wsgi-module", "config.wsgi"]
+    assert cli.run(args) == 0
+    assert api.projects[0]["slug"] == "ci-shop" and len(api.uploads) == 1
 
 
 def test_no_input_env_var_works_too(api, monkeypatch, capsys):

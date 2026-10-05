@@ -59,4 +59,22 @@ line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
+select = [
+    "E", "W", "F", "I", "B", "UP",
+    "S",    # bandit: security
+    "C4",   # comprehensions
+    "SIM",  # simplifications
+    "PT",   # pytest style
+    "RUF",  # ruff-specific
+    "PTH",  # pathlib
+    "T20",  # no stray print()
+    "PIE", "RET", "ARG",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The CLI shells out to `git` on purpose, with fixed arguments and no shell.
+# Command handlers share one (args, root) signature even when a handler needs neither.
+"src/djangocloud_cli/cli.py" = ["S603", "S607", "ARG001"]
+"src/djangocloud_cli/package.py" = ["S603", "S607"]
+# Tests assert, use throwaway HTTP servers on localhost, and have unused fixture arguments.
+"tests/*" = ["S101", "S105", "S106", "S108", "S603", "S607", "ARG001", "ARG002", "ARG005", "PT011", "PT012", "PT018", "RET502", "RET503", "PTH116", "RUF059"]

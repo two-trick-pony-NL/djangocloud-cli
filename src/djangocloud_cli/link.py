@@ -34,12 +34,39 @@ def load(root: Path) -> dict | None:
     return {"id": data.get("project_id"), "slug": data["project"], "api": data.get("api", "")}
 
 
+def _read_raw(root: Path) -> dict:
+    try:
+        data = json.loads((root / DIR / FILE).read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def load_build(root: Path) -> dict | None:
+    """The "build" settings block, or None when there isn't one yet."""
+    build = _read_raw(root).get("build")
+    return build if isinstance(build, dict) else None
+
+
+def save_build(root: Path, build: dict) -> Path:
+    """Write the build settings, keeping everything else in the file as it is."""
+    data = _read_raw(root)
+    data["build"] = build
+    path = root / DIR / FILE
+    path.write_text(json.dumps(data, indent=2) + "\n")
+    return path
+
+
 def save(root: Path, project: dict, api: str) -> Path:
     folder = root / DIR
     folder.mkdir(exist_ok=True)
     (folder / ".gitignore").write_text("*\n")
     path = folder / FILE
-    path.write_text(json.dumps({"project_id": project["id"], "project": project["slug"], "api": api}, indent=2) + "\n")
+    data = {"project_id": project["id"], "project": project["slug"], "api": api}
+    old = _read_raw(root)
+    if old.get("project") == project["slug"] and isinstance(old.get("build"), dict):
+        data["build"] = old["build"]  # relinking the same project must not wipe the build settings
+    path.write_text(json.dumps(data, indent=2) + "\n")
     return path
 
 

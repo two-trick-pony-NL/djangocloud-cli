@@ -14,40 +14,9 @@ python manage.py djangocloud deploy
 
 That's the whole idea: a few commands, from the project you already have.
 
-> **Early release.** Sign-in, linking a project and the interactive setup work today. The upload-and-deploy step is
-> still being built, and `deploy` will say so rather than pretend. Follow along at![Uploading og-image.png…]()
-
-> [djangocloud.dev](https://djangocloud.dev).
-
-## Get started
-
-1. **Install it** in your Django project's environment:
-
-   ```
-   pip install djangocloud-cli
-   ```
-
-2. **Add it to `INSTALLED_APPS`** in your settings:
-
-   ```python
-   INSTALLED_APPS = [
-       # ...
-       "djangocloud_cli",
-   ]
-   ```
-
-3. **Sign in.** No password to type into a terminal: you approve a short code in your browser.
-
-   ```
-   python manage.py djangocloud login
-   ```
-
-4. **Deploy.** The first time, it asks a couple of friendly questions (which project, what size of server) and
-   shows the monthly price before anything is created. After that it remembers.
-
-   ```
-   python manage.py djangocloud deploy
-   ```
+> **Early release.** Sign-in, linking, packaging and uploading work, and the deploy streams its progress back to
+> your terminal. Image builds on DjangoCloud's side are still being finished, so a deploy may stop at that step.
+> Follow along at [djangocloud.dev](https://djangocloud.dev).
 
 You need a [DjangoCloud](https://djangocloud.dev) account with a card on file to create projects.
 
@@ -59,9 +28,17 @@ You're not signed in yet.
 Open https://djangocloud.dev/dashboard/cli/?code=ABCD-EFGH and check that the code is ABCD-EFGH.
 ✓ Signed in as you@example.com
 ? Which project is this?  Create a new project
-? Server size  Nano  0.25 vCPU, 0.5 GB RAM  $10/month
-? This will cost $10 per month. Continue? Yes
+? Server size  Nano  0.25 vCPU, 0.5 GB RAM  ~$7/month on AWS
+? AWS bills you about $7/month for this server, directly in your own AWS account. Continue? Yes
 ✓ Linked to my-shop (.djangocloud/config.json)
+Deploying my-shop
+✓ Wrote build settings to .djangocloud/config.json
+  found wsgi_module = config.wsgi:application
+✓ Packed 148 files (212 KB). .env and .git are never uploaded.
+✓ Uploaded. Release v1 started.
+  Building v1
+  v1 is live
+✓ v1 is live.
 ```
 
 ## Features
@@ -77,7 +54,7 @@ All commands live under `python manage.py djangocloud`. Run it with no arguments
 | `whoami` | Show who you're signed in as, and which project this folder deploys to |
 | `link` | Pick or create the project this folder deploys to |
 | `unlink` | Detach this folder from its project |
-| `deploy` | Link the folder if needed, then deploy *(upload and build: coming)* |
+| `deploy` | Link the folder if needed, pack it, upload it and stream the release until it is live (`--github` deploys the linked repo's latest commit instead) |
 | `logs` | Show a project's logs *(coming)* |
 | `status` | Show the current release and its state *(coming)* |
 | `help [command]` | Help for everything, or for one command |
@@ -93,6 +70,39 @@ Arrow-key menus, clear prices up front and no surprises. Nothing is created unti
 
 `.djangocloud/config.json` records which project a folder deploys to. It holds no secrets, and a `.gitignore` inside
 the folder keeps it out of your repository. After the first run there are no prompts.
+
+### What gets uploaded
+
+The folder is packed into a `.tar.gz` that is the same every time for the same files. In a git repository that is
+what git sees (your `.gitignore` is respected); otherwise junk is skipped. Whatever `.gitignore` says, these never go
+up: `.env` and `.env.*` (except `.env.example`), `.git`, virtualenvs, `node_modules`, `*.sqlite3`, `*.pem`, `*.key` and
+caches. Set your environment variables in the dashboard, not in the upload.
+
+### Build settings
+
+The first deploy detects your setup and writes it to the `"build"` block of `.djangocloud/config.json`. That file is
+then the source of truth, so edit it to change how your app is built:
+
+```json
+{
+  "build": {
+    "wsgi_module": "config.wsgi:application",
+    "django_settings_module": "config.settings",
+    "python_version": "3.13",
+    "package_manager": "pip",
+    "requirements_file": "requirements.txt",
+    "system_packages": ["libpq-dev"],
+    "collectstatic": true,
+    "release_command": "python manage.py migrate --noinput",
+    "port": 8000,
+    "workers": 2,
+    "healthcheck_path": "/"
+  }
+}
+```
+
+The server checks every setting and lists all problems at once. The full list with defaults is at
+`/api/v1/build-config`. If your WSGI app can't be detected in CI, pass `--wsgi-module config.wsgi:application`.
 
 ### Safe sign-in
 
@@ -132,7 +142,8 @@ Python 3.10 or newer and Django 4.2 or newer.
 ```
 uv sync
 uv run pytest
-uv run ruff check
+uv run ruff check          # includes security (bandit), pytest-style, pathlib and simplification rules
+uv run ruff format --check
 ```
 
 Every push to `main` is released automatically: the tests run, the patch version goes up by one (0.1.1 becomes

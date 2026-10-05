@@ -1,5 +1,6 @@
 """`djangocloud login`: the device-code flow. No passwords or keys are typed into the terminal."""
 
+import contextlib
 import time
 import webbrowser
 
@@ -12,10 +13,8 @@ def login(client: Client, *, sleep=time.sleep, open_browser=webbrowser.open, cli
     started = client.post("/auth/device", {"client_name": client_name})
     url, code = started["verification_uri_complete"], started["user_code"]
     console.print(f"\nOpen [link={url}]{url}[/link]\nand check that the code is [bold]{code}[/bold].\n")
-    try:
+    with contextlib.suppress(Exception):  # no browser (SSH, CI) is fine: the URL is printed above
         open_browser(url)
-    except Exception:  # noqa: BLE001 - no browser (SSH, CI) is fine: the URL is printed above
-        pass
 
     interval = started.get("interval", 5)
     deadline = time.monotonic() + started.get("expires_in", 600)

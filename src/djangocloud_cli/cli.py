@@ -1,9 +1,11 @@
 """`djangocloud` command: one parser shared by the standalone script and `manage.py djangocloud`."""
 
 import argparse
+import subprocess
 import sys
+import time
 
-from . import __version__, auth, config, link
+from . import __version__, auth, config, detect, link, package
 from .api import ApiError, Client
 from .ui import NotInteractive, confirm, console, err, interactive, no_input, select, set_no_input, text
 
@@ -17,7 +19,10 @@ def say(command: str) -> str:
     return f"{_prog} {command}"
 
 
-COMING_SOON = "'{command}' isn't available yet: the build and deploy pipeline is still being built."
+COMING_SOON = "'{command}' isn't available yet."
+POLL_INTERVAL = 2  # seconds between release status checks
+DEPLOY_TIMEOUT = 20 * 60
+_sleep = time.sleep  # swapped out in tests
 
 
 def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
@@ -44,6 +49,15 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
         cmd.add_argument("--name", help="Create a new project with this name without prompting")
         cmd.add_argument("--size", help="Server size for a new project, e.g. nano")
         cmd.add_argument("-y", "--yes", action="store_true", help="Don't ask for confirmation")
+    deploy_flags = sub.choices["deploy"]
+    deploy_flags.add_argument(
+        "--wsgi-module", help="Your WSGI app, e.g. config.wsgi:application (if it can't be detected)"
+    )
+    deploy_flags.add_argument(
+        "--github",
+        action="store_true",
+        help="Deploy the latest commit of the project's linked GitHub repo instead of uploading this folder",
+    )
     sub.add_parser("unlink", help="Detach this folder from its project")
     sub.add_parser("status", help="Show the current release and its state")
 
@@ -88,9 +102,14 @@ def _price(cents: int) -> str:
     return f"${cents / 100:,.0f}" if cents % 100 == 0 else f"${cents / 100:,.2f}"
 
 
+def _aws_cents(size: dict) -> int:
+    """What AWS charges for this size in the user's own account (older servers only sent our price)."""
+    return size.get("aws_cents", size["price_cents"])
+
+
 def _size_label(size: dict) -> str:
     specs = f"{size['vcpu']:g} vCPU, {size['ram_gb']:g} GB RAM"
-    return f"{size['label']:<8} {specs:<22} {_price(size['price_cents'])}/month"
+    return f"{size['label']:<8} {specs:<22} ~{_price(_aws_cents(size))}/month on AWS"
 
 
 def ensure_linked(client: Client, root, args, *, force: bool = False) -> dict:
@@ -124,8 +143,9 @@ def create_project(client: Client, root, args) -> dict:
             raise CliError(f"Unknown size {args.size!r}. Choose from: {', '.join(s['power'] for s in sizes)}.")
     else:
         size = select("Server size", [(_size_label(s), s) for s in sizes])
-    monthly = _price(size["price_cents"])
-    if not (args.yes or no_input()) and not confirm(f"This will cost {monthly} per month. Continue?"):
+    monthly = _price(_aws_cents(size))
+    note = f"AWS bills you about {monthly}/month for this server, directly in your own AWS account. Continue?"
+    if not (args.yes or no_input()) and not confirm(note):
         raise CliError("Cancelled. Nothing was created.")
     try:
         return client.post("/projects", {"name": name, "power": size["power"]})
@@ -180,14 +200,145 @@ def cmd_unlink(args, root) -> int:
     return 0
 
 
+def site_url() -> str:
+    return config.api_url().removesuffix("/api/v1")
+
+
+def preflight(client: Client) -> None:
+    """Say what is missing before we spend time packaging and uploading."""
+    me = client.get("/me")
+    if me.get("ready_to_deploy", True):
+        return
+    if me.get("suspended"):
+        raise CliError(f"Your account is suspended for non-payment. Update your card: {site_url()}/dashboard/billing/")
+    if not me.get("subscription_active", True):
+        raise CliError(f"No card on file yet. Add one to activate your account: {site_url()}/dashboard/billing/")
+    if not me.get("aws_connected", True):
+        raise CliError(f"Connect your AWS account (IAM access key and region) first: {site_url()}/dashboard/aws/")
+
+
+def ensure_build_settings(client: Client, root, wsgi_module: str | None = None) -> dict:
+    """The "build" block of .djangocloud/config.json: detected and written on the first deploy, then yours to edit."""
+    build = link.load_build(root)
+    if build is None:
+        schema = client.get("/build-config")
+        found, notes = detect.detect(root, schema)
+        build = {**schema["defaults"], **found}
+        if wsgi_module:
+            build["wsgi_module"] = wsgi_module
+        if not build.get("wsgi_module") and not interactive():
+            raise CliError(
+                "Couldn't detect your WSGI app. Pass --wsgi-module config.wsgi:application "
+                f'(or set "wsgi_module" under "build" in {link.DIR}/{link.FILE}).'
+            )
+        if not build.get("wsgi_module"):
+            build["wsgi_module"] = text("Where is your WSGI app? (e.g. config.wsgi:application)")
+        path = link.save_build(root, build)
+        console.print(f"[green]✓[/green] Wrote build settings to {path.relative_to(root)}")
+        for note in notes:
+            console.print(f"  [dim]found {note}[/dim]")
+        console.print("  [dim]Edit that file to change how your app is built.[/dim]")
+    if not build.get("wsgi_module"):
+        raise CliError(f'Set "wsgi_module" (e.g. config.wsgi:application) in {link.DIR}/{link.FILE} under "build".')
+    base = root / build.get("root", ".")
+    if build.get("package_manager") == "uv":
+        needed = ["pyproject.toml", "uv.lock"]
+    else:
+        needed = [build.get("requirements_file", "requirements.txt")]
+    missing = [n for n in needed if not (base / n).is_file()]
+    if missing:
+        raise CliError(f"Missing {', '.join(missing)}: your dependencies must be listed so the image can install them.")
+    return build
+
+
+def git_sha(root) -> str:
+    try:
+        sha = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, check=True, timeout=10)
+        return sha.stdout.decode().strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def explain(exc: ApiError) -> CliError:
+    """An API refusal as one clear message plus the link that fixes it."""
+    extra = exc.payload.get("billing_url") or exc.payload.get("aws_url")
+    return CliError(f"{exc.message}\n  → {extra}" if extra else exc.message)
+
+
+def print_log(line: dict) -> None:
+    level = line.get("level", "info")
+    style = {"error": "red", "warning": "yellow"}.get(level)
+    console.print(
+        f"  [{style}]{line['message']}[/{style}]" if style else f"  [dim]{line['message']}[/dim]", highlight=False
+    )
+
+
+def follow(client: Client, release: dict) -> int:
+    """Stream the release's log lines until it is live or failed."""
+    cursor, started, failures = 0, time.monotonic(), 0
+    try:
+        while True:
+            try:
+                state = client.get(f"/releases/{release['id']}?after={cursor}")
+                failures = 0
+            except ApiError as exc:
+                if exc.code != "unreachable" or (failures := failures + 1) > 5:
+                    raise
+                _sleep(POLL_INTERVAL)
+                continue
+            for line in state["logs"]:
+                print_log(line)
+            cursor = state["cursor"]
+            if state["done"]:
+                break
+            if time.monotonic() - started > DEPLOY_TIMEOUT:
+                raise CliError(
+                    "Still not finished after 20 minutes. It keeps running; check the dashboard for its status."
+                )
+            _sleep(POLL_INTERVAL)
+    except KeyboardInterrupt:
+        err.print("\nStopped watching. The deploy keeps running on DjangoCloud; check the dashboard for its status.")
+        return 130
+    if state["ok"]:
+        console.print(f"[green]✓[/green] v{state['version']} is live.")
+        return 0
+    err.print(f"[red]✗ v{state['version']} failed.[/red] The lines above say why.")
+    return 1
+
+
 def cmd_deploy(args, root) -> int:
     client = make_client()
     ensure_login(client)
     project = ensure_linked(client, root, args)
-    console.print(f"Ready to deploy [bold]{project['slug']}[/bold].")
-    err.print(COMING_SOON.format(command=say("deploy")))
-    err.print("Your project is linked, so the next release will pick it up.")
-    return 2
+    console.print(f"Deploying [bold]{project['slug']}[/bold]")
+    preflight(client)
+    fields = {"git_sha": git_sha(root)}
+    if args.github:
+        console.print("Deploying the latest commit from the linked GitHub repository.")
+        data = None
+    else:
+        ensure_build_settings(client, root, args.wsgi_module)
+        try:
+            data, count = package.build(root)
+        except package.PackageError as exc:
+            raise CliError(str(exc)) from None
+        console.print(
+            f"[green]✓[/green] Packed {count} files ({len(data) / 1024:,.0f} KB). .env and .git are never uploaded."
+        )
+    try:
+        release = client.upload(
+            f"/projects/{project['id']}/releases",
+            fields=fields,
+            file_field="source",
+            filename="source.tar.gz",
+            content=data,
+        )
+    except ApiError as exc:
+        if exc.code == "deploy_in_progress":
+            raise CliError(exc.message) from None
+        raise explain(exc) from None
+    console.print(f"[green]✓[/green] Uploaded. Release v{release['version']} started.")
+    return follow(client, release)
 
 
 COMMANDS = {
