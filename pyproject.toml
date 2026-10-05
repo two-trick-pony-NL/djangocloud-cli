@@ -5,7 +5,32 @@ description = "Deploy a Django app from the command line: djangocloud login, dja
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["rich>=13", "questionary>=2.0"]
-classifiers = ["Framework :: Django", "Programming Language :: Python :: 3"]
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Peter van Doorn", email = "peter@petervandoorn.com" }]
+keywords = ["django", "deploy", "cli", "aws", "lightsail"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Framework :: Django",
+    "Framework :: Django :: 4.2",
+    "Framework :: Django :: 5.0",
+    "Framework :: Django :: 5.1",
+    "Framework :: Django :: 5.2",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+]
+
+[project.urls]
+Homepage = "https://djangocloud.dev"
+Source = "https://github.com/two-trick-pony-NL/djangocloud-cli"
+Issues = "https://github.com/two-trick-pony-NL/djangocloud-cli/issues"
 
 [project.scripts]
 djangocloud = "djangocloud_cli.cli:main"

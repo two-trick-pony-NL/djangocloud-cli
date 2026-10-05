@@ -1,0 +1,19 @@
+# Publishes to PyPI when a GitHub Release is published. Uses PyPI "trusted publishing" (OIDC), so no
+# API token is stored anywhere. One-time setup: on pypi.org add a trusted publisher for this repository,
+# workflow "publish.yml", environment "pypi".
+name: publish
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1
