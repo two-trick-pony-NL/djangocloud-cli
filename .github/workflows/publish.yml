@@ -1,31 +1,91 @@
-# Publishes to PyPI when a GitHub Release is published. Uses PyPI "trusted publishing" (OIDC), so no
-# API token is stored anywhere. One-time setup: on pypi.org add a trusted publisher for this repository,
-# workflow "publish.yml", environment "pypi".
+# Every push to main is released: tests pass, the patch version is bumped (v0.1.1 -> v0.1.2), the package is
+# published to PyPI and a GitHub Release with the tag is created. No version numbers to edit by hand.
+#
+# For a bigger bump (0.2.0, 1.0.0), create the tag yourself first, e.g. `git tag v0.2.0 && git push --tags`;
+# the next push to main continues from there. Add [skip release] to a commit message to skip releasing it.
+#
+# Publishing uses PyPI "trusted publishing" (OIDC), so no API token is stored. This file must stay named
+# publish.yml with environment "pypi": that is what the trusted publisher on pypi.org is registered to.
 name: publish
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
+
+# One release at a time, so two quick pushes can't compute the same version.
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
 jobs:
+  test:
+    if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run ruff check
+      - run: uv run pytest
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      contents: read  # a job-level permissions block drops the defaults; checkout of a private repo needs this
+      contents: write  # create the tag and the GitHub Release (also lets checkout read a private repo)
       id-token: write  # trusted publishing
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # the version is read from git tags
-      - uses: astral-sh/setup-uv@v5
-      - run: uv build
-      - name: Built version must match the release tag
+          fetch-depth: 0  # the version is derived from git tags
+
+      - name: Work out the next version
+        id: version
         run: |
           set -euo pipefail
-          expected="${GITHUB_REF_NAME#v}"
+          if git tag --points-at HEAD | grep -q '^v[0-9]'; then
+            echo "This commit is already tagged; nothing to release."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          last=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)
+          last=${last:-v0.0.0}
+          IFS=. read -r major minor patch <<< "${last#v}"
+          next="${major}.${minor}.$((patch + 1))"
+          echo "Releasing ${next} (previous: ${last})"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "version=${next}" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@v5
+        if: steps.version.outputs.skip != 'true'
+
+      - name: Build
+        if: steps.version.outputs.skip != 'true'
+        env:
+          # hatch-vcs would otherwise derive a dev version, because the tag doesn't exist yet
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.version.outputs.version }}
+        run: uv build
+
+      - name: Built version must match
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
           built=$(ls dist/*.whl | sed -E 's#.*/[^-]+-([^-]+)-.*#\1#')
-          if [ "$built" != "$expected" ]; then
-            echo "::error::Built version $built does not match tag ${GITHUB_REF_NAME}"
+          if [ "$built" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::Built version $built does not match ${{ steps.version.outputs.version }}"
             exit 1
           fi
+
       - uses: pypa/gh-action-pypi-publish@release/v1
+        if: steps.version.outputs.skip != 'true'
+
+      # Only after PyPI accepted the upload, so a failed publish never leaves a tag behind.
+      - name: Tag and create the GitHub Release
+        if: steps.version.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            --target "${{ github.sha }}" \
+            --title "${{ steps.version.outputs.version }}" \
+            --generate-notes

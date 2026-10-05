@@ -133,8 +133,11 @@ uv run pytest
 uv run ruff check
 ```
 
-Releases are published to PyPI from GitHub Releases. The version comes from the git tag, so tagging `v0.2.0`
-publishes `0.2.0`.
+Every push to `main` is released automatically: the tests run, the patch version goes up by one (0.1.1 becomes
+0.1.2), the package is published to PyPI and a GitHub Release is created. There are no version numbers to edit.
+
+For a bigger bump, tag it yourself before the next push (`git tag v0.2.0 && git push --tags`) and releases continue
+from there. Put `[skip release]` in a commit message to skip releasing that commit.
 
 ## License
 
