@@ -7,10 +7,20 @@ from . import __version__, auth, config, link
 from .api import ApiError, Client
 from .ui import NotInteractive, confirm, console, err, interactive, no_input, select, set_no_input, text
 
-COMING_SOON = "'djangocloud {name}' isn't available yet: the build and deploy pipeline is still being built."
+STANDALONE = "djangocloud"
+MANAGE_PY = "python manage.py djangocloud"
+_prog = MANAGE_PY  # what messages tell people to type; set by run() to match how we were invoked
 
 
-def build_parser(prog: str = "djangocloud") -> argparse.ArgumentParser:
+def say(command: str) -> str:
+    """The command as the user types it, e.g. 'python manage.py djangocloud login'."""
+    return f"{_prog} {command}"
+
+
+COMING_SOON = "'{command}' isn't available yet: the build and deploy pipeline is still being built."
+
+
+def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog, description="Deploy your Django app.")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(
@@ -67,7 +77,7 @@ def ensure_login(client: Client) -> None:
     if not interactive():
         raise CliError(
             "Not signed in. In CI set DJANGOCLOUD_TOKEN (create one at /dashboard/cli/); "
-            "on your own machine run 'djangocloud login'."
+            f"on your own machine run '{say('login')}'."
         )
     console.print("You're not signed in yet.")
     auth.login(client)
@@ -127,7 +137,7 @@ def create_project(client: Client, root, args) -> dict:
 
 def cmd_login(args, root) -> int:
     if not interactive():
-        raise CliError("'djangocloud login' needs a browser. In CI use a DJANGOCLOUD_TOKEN instead.")
+        raise CliError(f"'{say('login')}' needs a browser. In CI use a DJANGOCLOUD_TOKEN instead.")
     client = make_client()
     auth.login(client)
     console.print(f"[green]✓[/green] Signed in as {client.get('/me')['email']}")
@@ -137,14 +147,14 @@ def cmd_login(args, root) -> int:
 def cmd_whoami(args, root) -> int:
     client = make_client()
     if not client.token:
-        console.print("Not signed in. Run [bold]djangocloud login[/bold].")
+        console.print(f"Not signed in. Run [bold]{say('login')}[/bold].")
         return 1
     try:
         me = client.get("/me")
     except ApiError as exc:
         if exc.code != "unauthorized":
             raise
-        console.print("Your token is no longer valid. Run [bold]djangocloud login[/bold].")
+        console.print(f"Your token is no longer valid. Run [bold]{say('login')}[/bold].")
         return 1
     console.print(f"Signed in as [bold]{me['email']}[/bold]")
     linked = link.load(root)
@@ -175,7 +185,8 @@ def cmd_deploy(args, root) -> int:
     ensure_login(client)
     project = ensure_linked(client, root, args)
     console.print(f"Ready to deploy [bold]{project['slug']}[/bold].")
-    err.print(COMING_SOON.format(name="deploy") + " Your project is linked, so the next release will pick it up.")
+    err.print(COMING_SOON.format(command=say("deploy")))
+    err.print("Your project is linked, so the next release will pick it up.")
     return 2
 
 
@@ -189,7 +200,9 @@ COMMANDS = {
 }
 
 
-def run(argv: list[str] | None = None, prog: str = "djangocloud") -> int:
+def run(argv: list[str] | None = None, prog: str = STANDALONE) -> int:
+    global _prog
+    _prog = prog
     parser = build_parser(prog)
     args = parser.parse_args(argv)
     set_no_input(getattr(args, "no_input", False))
@@ -202,7 +215,7 @@ def run(argv: list[str] | None = None, prog: str = "djangocloud") -> int:
         return 0
     handler = COMMANDS.get(args.command)
     if handler is None:
-        err.print(COMING_SOON.format(name=args.command))
+        err.print(COMING_SOON.format(command=say(args.command)))
         return 2
     try:
         return handler(args, link.find_root())

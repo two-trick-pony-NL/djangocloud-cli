@@ -3,13 +3,14 @@
 Command-line client for DjangoCloud. Standard library only.
 
 ```
-pip install djangocloud-cli
-djangocloud login
-djangocloud deploy
-djangocloud logs -f
+pip install djangocloud-cli          # then add "djangocloud_cli" to INSTALLED_APPS
+python manage.py djangocloud login
+python manage.py djangocloud deploy
+python manage.py djangocloud logs -f
+python manage.py djangocloud help
 ```
 
-Inside a Django project, add `djangocloud_cli` to `INSTALLED_APPS` and use `python manage.py djangocloud <command>`.
+A standalone `djangocloud` script is installed too (same commands, no `manage.py`), for when your settings won't load.
 
 **Status:** early. `help`, `login`, `logout`, `whoami`, `link`, `unlink` and the interactive setup in `deploy` work
 (they need the DjangoCloud API). Uploading, building and deploying, `logs` and `status` are next.
@@ -17,7 +18,7 @@ Inside a Django project, add `djangocloud_cli` to `INSTALLED_APPS` and use `pyth
 ## First run
 
 ```
-$ djangocloud deploy
+$ python manage.py djangocloud deploy
 You're not signed in yet.
 Open https://djangocloud.dev/dashboard/cli/?code=ABCD-EFGH and check that the code is ABCD-EFGH.
 ✓ Signed in as you@example.com
@@ -37,7 +38,7 @@ Create a token under **Command line → Token for CI** in the dashboard and stor
 
 ```yaml
 - run: pip install djangocloud-cli
-- run: djangocloud deploy --no-input --project my-shop
+- run: python manage.py djangocloud deploy --no-input --project my-shop
   env:
     DJANGOCLOUD_TOKEN: ${{ secrets.DJANGOCLOUD_TOKEN }}
 ```
@@ -50,7 +51,7 @@ Create a token under **Command line → Token for CI** in the dashboard and stor
 | `DJANGOCLOUD_NO_INPUT` | Same as `--no-input` (set it to `1`) |
 | `DJANGOCLOUD_API` | API base URL (default `https://djangocloud.dev/api/v1`) |
 
-The token from `djangocloud login` is stored in `~/.config/djangocloud/credentials.json` (mode 600).
+The token from `login` is stored in `~/.config/djangocloud/credentials.json` (mode 600).
 
 ## Development
 

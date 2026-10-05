@@ -34,4 +34,4 @@ def login(client: Client, *, sleep=time.sleep, open_browser=webbrowser.open, cli
             config.save_token(token)
             client.token = token
             return token
-    raise ApiError(400, "expired_token", "That login expired. Run 'djangocloud login' again.")
+    raise ApiError(400, "expired_token", "That login expired. Run the login command again.")
