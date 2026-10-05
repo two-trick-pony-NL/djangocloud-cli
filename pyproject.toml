@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "Deploy a Django app from the command line: cloud login, cloud deploy, cloud logs."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []  # standard library only, so it can't conflict with the host project's packages
+dependencies = ["rich>=13", "questionary>=2.0"]
 classifiers = ["Framework :: Django", "Programming Language :: Python :: 3"]
 
 [project.scripts]
