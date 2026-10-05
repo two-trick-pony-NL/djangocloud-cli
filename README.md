@@ -1,4 +1,6 @@
 # djangocloud-cli
+<img width="1200" height="630" alt="og-image" src="https://github.com/user-attachments/assets/061d5725-dfba-49b9-906e-79a3e938dfb7" />
+
 
 **Deploying a Django app shouldn't be a hassle.**
 
@@ -14,7 +16,8 @@ python manage.py djangocloud deploy
 That's the whole idea: a few commands, from the project you already have.
 
 > **Early release.** Sign-in, linking a project and the interactive setup work today. The upload-and-deploy step is
-> still being built, and `deploy` will say so rather than pretend. Follow along at
+> still being built, and `deploy` will say so rather than pretend. Follow along at![Uploading og-image.png…]()
+
 > [djangocloud.dev](https://djangocloud.dev).
 
 ## Get started
