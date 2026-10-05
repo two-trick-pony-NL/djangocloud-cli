@@ -1,4 +1,3 @@
-# djangocloud-cli
 <img width="1200" height="630" alt="og-image" src="https://github.com/user-attachments/assets/061d5725-dfba-49b9-906e-79a3e938dfb7" />
 
 
