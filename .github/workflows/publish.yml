@@ -11,7 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      id-token: write
+      contents: read  # a job-level permissions block drops the defaults; checkout of a private repo needs this
+      id-token: write  # trusted publishing
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
