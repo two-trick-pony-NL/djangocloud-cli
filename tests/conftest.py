@@ -17,6 +17,7 @@ class FakeApi:
         self.projects = []
         self.card = True
         self.aws = True
+        self.can_host = False
         self.uploads = []  # (project_id, fields, tarball bytes or None)
         self.release_error = None  # (status, body) to answer the upload with
         self.release_script = [
@@ -112,6 +113,7 @@ class FakeApi:
                 if self.path == "/api/v1/me":
                     return self._reply(200, {"email": "a@example.com", "subscription_active": api.card,
                                              "suspended": False, "aws_connected": api.aws,
+                                             "can_host": api.can_host,
                                              "ready_to_deploy": api.card and api.aws})  # fmt: skip
                 if self.path == "/api/v1/projects":
                     return self._reply(200, {"projects": api.projects})
@@ -138,7 +140,8 @@ class FakeApi:
                     if not api.card:
                         return self._reply(402, {"error": "payment_required", "message": "Add a card first."})
                     project = {"id": len(api.projects) + 1, "slug": body["name"].lower().replace(" ", "-"),
-                               "name": body["name"], "power": body["power"]}  # fmt: skip
+                               "name": body["name"], "power": body["power"],
+                               "hosted": bool(body.get("hosted"))}  # fmt: skip
                     api.projects.append(project)
                     return self._reply(201, project)
                 self._reply(404, {"error": "not_found", "message": "nope"})

@@ -48,6 +48,11 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
         cmd.add_argument("--project", help="Use this existing project (slug) without prompting")
         cmd.add_argument("--name", help="Create a new project with this name without prompting")
         cmd.add_argument("--size", help="Server size for a new project, e.g. nano")
+        where = cmd.add_mutually_exclusive_group()
+        where.add_argument(
+            "--hosted", action="store_true", help="New project: we run it for you (Company/Enterprise plans)"
+        )
+        where.add_argument("--own-cloud", action="store_true", help="New project: it runs in your own AWS account")
         cmd.add_argument("-y", "--yes", action="store_true", help="Don't ask for confirmation")
     deploy_flags = sub.choices["deploy"]
     deploy_flags.add_argument(
@@ -134,8 +139,26 @@ def ensure_linked(client: Client, root, args, *, force: bool = False) -> dict:
     return project
 
 
+def choose_where(client: Client, args) -> bool:
+    """True to have DjangoCloud host the project; False to run it in the user's own AWS account."""
+    can_host = client.get("/me").get("can_host", False)
+    if args.hosted:
+        if not can_host:
+            raise CliError(
+                f"Hosting needs the Company or Enterprise plan. Switch plans: {site_url()}/dashboard/billing/"
+            )
+        return True
+    if args.own_cloud or not can_host or args.yes or no_input():
+        return False
+    return select(
+        "Where should it run?",
+        [("We host it for you, in an AWS environment made just for you", True), ("In your own AWS account", False)],
+    )
+
+
 def create_project(client: Client, root, args) -> dict:
     name = args.name or text("Project name", default=root.name)
+    hosted = choose_where(client, args)
     sizes = client.get("/sizes")["sizes"]
     if args.size:
         size = next((s for s in sizes if s["power"] == args.size), None)
@@ -143,12 +166,16 @@ def create_project(client: Client, root, args) -> dict:
             raise CliError(f"Unknown size {args.size!r}. Choose from: {', '.join(s['power'] for s in sizes)}.")
     else:
         size = select("Server size", [(_size_label(s), s) for s in sizes])
-    monthly = _price(_aws_cents(size))
-    note = f"AWS bills you about {monthly}/month for this server, directly in your own AWS account. Continue?"
+    if hosted:
+        price = _price(size["price_cents"])
+        note = f"Your plan bills {price}/month for this server, charged before anything is set up. Continue?"
+    else:
+        monthly = _price(_aws_cents(size))
+        note = f"AWS bills you about {monthly}/month for this server, directly in your own AWS account. Continue?"
     if not (args.yes or no_input()) and not confirm(note):
         raise CliError("Cancelled. Nothing was created.")
     try:
-        return client.post("/projects", {"name": name, "power": size["power"]})
+        return client.post("/projects", {"name": name, "power": size["power"], **({"hosted": True} if hosted else {})})
     except ApiError as exc:
         if exc.code == "payment_required":
             raise CliError(f"{exc.message}") from None
@@ -204,11 +231,16 @@ def site_url() -> str:
     return config.api_url().removesuffix("/api/v1")
 
 
-def preflight(client: Client) -> None:
+def preflight(client: Client, slug: str = "") -> None:
     """Say what is missing before we spend time packaging and uploading."""
     me = client.get("/me")
     if me.get("ready_to_deploy", True):
         return
+    hosted = any(p.get("hosted") and p.get("slug") == slug for p in client.get("/projects").get("projects", []))
+    if hosted:  # we run it: no AWS connection is needed, only a card in good standing
+        me = {**me, "aws_connected": True}
+        if me.get("subscription_active", True) and not me.get("suspended"):
+            return
     if me.get("suspended"):
         raise CliError(f"Your account is suspended for non-payment. Update your card: {site_url()}/dashboard/billing/")
     if not me.get("subscription_active", True):
@@ -311,7 +343,7 @@ def cmd_deploy(args, root) -> int:
     ensure_login(client)
     project = ensure_linked(client, root, args)
     console.print(f"Deploying [bold]{project['slug']}[/bold]")
-    preflight(client)
+    preflight(client, project["slug"])
     fields = {"git_sha": git_sha(root)}
     if args.github:
         console.print("Deploying the latest commit from the linked GitHub repository.")

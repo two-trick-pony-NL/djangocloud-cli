@@ -235,3 +235,34 @@ def test_the_size_menu_quotes_the_aws_price_when_the_server_sends_it():
     size = {"label": "Nano", "vcpu": 0.25, "ram_gb": 0.5, "price_cents": 1000, "aws_cents": 700}
     assert "$7" in cli._size_label(size) and "$10" not in cli._size_label(size)
     assert "$10" in cli._size_label({**size, "aws_cents": None} | {"aws_cents": 1000})
+
+
+# ---- hosted projects (we run it for you) ------------------------------------------------------------------------
+
+
+def posted_projects(api):
+    return [r for r in api.requests if r[0] == "POST" and r[1] == "/api/v1/projects"]
+
+
+def test_a_hosted_project_is_created_with_hosted_true_and_needs_no_aws_connection(api, project_dir):
+    api.can_host, api.aws = True, False  # we host it: no AWS connection of theirs is needed
+    assert deploy(api, "--hosted") == 0
+    assert posted_projects(api)[0][2]["hosted"] is True
+
+
+def test_asking_for_hosting_without_the_plan_explains_how_to_get_it_and_creates_nothing(api, project_dir, capsys):
+    api.can_host = False
+    assert deploy(api, "--hosted") != 0
+    assert "Company or Enterprise" in capsys.readouterr().err
+    assert posted_projects(api) == []
+
+
+def test_own_cloud_stays_the_default_and_never_sends_hosted(api, project_dir):
+    api.can_host = True
+    deploy(api)
+    assert "hosted" not in posted_projects(api)[0][2]
+
+
+def test_a_card_in_good_standing_is_enough_to_deploy_a_hosted_project(api, project_dir):
+    api.can_host, api.aws = True, False
+    assert deploy(api, "--hosted") == 0  # preflight must not demand an AWS connection for a hosted project
