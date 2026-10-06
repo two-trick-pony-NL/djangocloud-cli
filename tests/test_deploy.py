@@ -266,3 +266,62 @@ def test_own_cloud_stays_the_default_and_never_sends_hosted(api, project_dir):
 def test_a_card_in_good_standing_is_enough_to_deploy_a_hosted_project(api, project_dir):
     api.can_host, api.aws = True, False
     assert deploy(api, "--hosted") == 0  # preflight must not demand an AWS connection for a hosted project
+
+
+# ---------- ASGI and uvicorn ----------
+
+SCHEMA_WITH_ASGI = {
+    "fields": [
+        {"name": "python_version", "choices": ["3.10", "3.11", "3.12", "3.13"]},
+        {"name": "asgi_module", "choices": []},
+        {"name": "server", "choices": ["auto", "uvicorn", "gunicorn"]},
+    ]
+}
+
+
+def add_asgi(
+    project_dir, body="from django.core.asgi import get_asgi_application\napplication = get_asgi_application()\n"
+):
+    (project_dir / "config" / "asgi.py").write_text(body)
+
+
+def test_an_asgi_app_is_found_and_started_with_uvicorn_by_the_server(project_dir):
+    add_asgi(project_dir)
+    found, notes = detect.detect(project_dir, SCHEMA_WITH_ASGI)
+    assert found["asgi_module"] == "config.asgi:application" and found["wsgi_module"] == "config.wsgi:application"
+    assert "server" not in found  # left on "auto": uvicorn, because there is an ASGI app
+    assert any("uvicorn" in n for n in notes)
+
+
+def test_a_wsgi_py_that_wraps_the_app_keeps_gunicorn_and_says_why(project_dir):
+    add_asgi(project_dir)
+    (project_dir / "config" / "wsgi.py").write_text(
+        "from django.core.wsgi import get_wsgi_application\nfrom whitenoise import WhiteNoise\n"
+        "application = get_wsgi_application()\napplication = WhiteNoise(application, root='static')\n"
+    )
+    found, notes = detect.detect(project_dir, SCHEMA_WITH_ASGI)
+    assert found["server"] == "gunicorn" and found["asgi_module"] == "config.asgi:application"
+    assert any("wraps the app" in n for n in notes)
+
+
+def test_an_asgi_only_project_is_detected(project_dir):
+    add_asgi(project_dir)
+    (project_dir / "config" / "wsgi.py").unlink()
+    found, _ = detect.detect(project_dir, SCHEMA_WITH_ASGI)
+    assert "wsgi_module" not in found and found["asgi_module"] == "config.asgi:application"
+
+
+def test_an_older_server_without_asgi_settings_is_left_alone(project_dir):
+    add_asgi(project_dir)
+    found, _ = detect.detect(project_dir, SCHEMA)  # the schema has no asgi_module or server
+    assert "asgi_module" not in found and "server" not in found
+
+
+def test_a_plain_wsgi_py_is_not_mistaken_for_a_wrapper(project_dir):
+    assert not detect.wsgi_wraps_the_app(project_dir, "config.wsgi:application")
+
+
+def test_virtualenv_asgi_files_are_not_mistaken_for_yours(project_dir):
+    (project_dir / ".venv" / "lib" / "x").mkdir(parents=True)
+    (project_dir / ".venv" / "lib" / "x" / "asgi.py").write_text("application = 1")
+    assert detect.asgi_module(project_dir) == ""

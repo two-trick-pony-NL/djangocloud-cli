@@ -28,6 +28,30 @@ def wsgi_module(root: Path) -> str:
     return ""
 
 
+def asgi_module(root: Path) -> str:
+    """e.g. config.asgi:application, from the shallowest asgi.py that defines `application`."""
+    for rel in sorted(_walk(root, "asgi.py"), key=lambda p: len(p.parts)):
+        if rel.parent != Path() and "application" in (root / rel).read_text(errors="ignore"):
+            return ".".join(rel.with_suffix("").parts) + ":application"
+    return ""
+
+
+_PLAIN_WSGI = re.compile(r"^\s*application\s*=\s*get_wsgi_application\(\)\s*$", re.MULTILINE)
+_ANY_APPLICATION = re.compile(r"^\s*application\s*=", re.MULTILINE)
+
+
+def wsgi_wraps_the_app(root: Path, module: str) -> bool:
+    """True when wsgi.py does more than `application = get_wsgi_application()` (WhiteNoise, Sentry, gevent...).
+    Running such a project under ASGI would silently skip that wrapper, so it keeps gunicorn."""
+    path = root / (module.split(":")[0].replace(".", "/") + ".py")
+    try:
+        text = path.read_text(errors="ignore")
+    except OSError:
+        return False
+    assignments = _ANY_APPLICATION.findall(text)
+    return len(assignments) != len(_PLAIN_WSGI.findall(text))
+
+
 def settings_module(root: Path) -> str:
     try:
         text = (root / "manage.py").read_text(errors="ignore")
@@ -59,9 +83,18 @@ def detect(root: Path, schema: dict) -> tuple[dict, list[str]]:
     fields = {f["name"]: f for f in schema["fields"]}
     build: dict = {}
     notes: list[str] = []
-    if wsgi := wsgi_module(root):
+    wsgi, asgi = wsgi_module(root), asgi_module(root) if "asgi_module" in fields else ""
+    if wsgi:
         build["wsgi_module"] = wsgi
         notes.append(f"wsgi_module = {wsgi}")
+    if asgi:
+        build["asgi_module"] = asgi
+        if wsgi and wsgi_wraps_the_app(root, wsgi) and "server" in fields:
+            build["server"] = "gunicorn"
+            notes.append(f"asgi_module = {asgi}")
+            notes.append("server = gunicorn (your wsgi.py wraps the app; set server to uvicorn to use ASGI instead)")
+        else:
+            notes.append(f"asgi_module = {asgi} (started with uvicorn)")
     if settings := settings_module(root):
         build["django_settings_module"] = settings
         notes.append(f"django_settings_module = {settings}")

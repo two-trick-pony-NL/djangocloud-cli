@@ -59,6 +59,9 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
         "--wsgi-module", help="Your WSGI app, e.g. config.wsgi:application (if it can't be detected)"
     )
     deploy_flags.add_argument(
+        "--asgi-module", help="Your ASGI app, e.g. config.asgi:application. When set, it is started with uvicorn"
+    )
+    deploy_flags.add_argument(
         "--github",
         action="store_true",
         help="Deploy the latest commit of the project's linked GitHub repo instead of uploading this folder",
@@ -249,7 +252,7 @@ def preflight(client: Client, slug: str = "") -> None:
         raise CliError(f"Connect your AWS account (IAM access key and region) first: {site_url()}/dashboard/aws/")
 
 
-def ensure_build_settings(client: Client, root, wsgi_module: str | None = None) -> dict:
+def ensure_build_settings(client: Client, root, wsgi_module: str | None = None, asgi_module: str | None = None) -> dict:
     """The "build" block of .djangocloud/config.json: detected and written on the first deploy, then yours to edit."""
     build = link.load_build(root)
     if build is None:
@@ -258,20 +261,25 @@ def ensure_build_settings(client: Client, root, wsgi_module: str | None = None) 
         build = {**schema["defaults"], **found}
         if wsgi_module:
             build["wsgi_module"] = wsgi_module
-        if not build.get("wsgi_module") and not interactive():
+        if asgi_module:
+            build["asgi_module"] = asgi_module
+        if not (build.get("wsgi_module") or build.get("asgi_module")) and not interactive():
             raise CliError(
-                "Couldn't detect your WSGI app. Pass --wsgi-module config.wsgi:application "
-                f'(or set "wsgi_module" under "build" in {link.DIR}/{link.FILE}).'
+                "Couldn't detect your app (no wsgi.py or asgi.py found). Pass --asgi-module config.asgi:application "
+                f'or --wsgi-module config.wsgi:application (or set them under "build" in {link.DIR}/{link.FILE}).'
             )
-        if not build.get("wsgi_module"):
+        if not (build.get("wsgi_module") or build.get("asgi_module")):
             build["wsgi_module"] = text("Where is your WSGI app? (e.g. config.wsgi:application)")
         path = link.save_build(root, build)
         console.print(f"[green]✓[/green] Wrote build settings to {path.relative_to(root)}")
         for note in notes:
             console.print(f"  [dim]found {note}[/dim]")
         console.print("  [dim]Edit that file to change how your app is built.[/dim]")
-    if not build.get("wsgi_module"):
-        raise CliError(f'Set "wsgi_module" (e.g. config.wsgi:application) in {link.DIR}/{link.FILE} under "build".')
+    if not (build.get("wsgi_module") or build.get("asgi_module") or build.get("start_command")):
+        raise CliError(
+            f'Set "asgi_module" (e.g. config.asgi:application) or "wsgi_module" under "build" in '
+            f"{link.DIR}/{link.FILE}."
+        )
     base = root / build.get("root", ".")
     if build.get("package_manager") == "uv":
         needed = ["pyproject.toml", "uv.lock"]
@@ -349,7 +357,7 @@ def cmd_deploy(args, root) -> int:
         console.print("Deploying the latest commit from the linked GitHub repository.")
         data = None
     else:
-        ensure_build_settings(client, root, args.wsgi_module)
+        ensure_build_settings(client, root, args.wsgi_module, args.asgi_module)
         try:
             data, count = package.build(root)
         except package.PackageError as exc:
