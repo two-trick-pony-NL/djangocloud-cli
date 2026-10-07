@@ -8,9 +8,11 @@ No Dockerfiles. No load balancers. No server to babysit. You add one package to 
 
 ```
 pip install djangocloud-cli
-python manage.py djangocloud login
-python manage.py djangocloud deploy
+djangocloud login
+djangocloud deploy
 ```
+
+No settings to change. (Prefer `python manage.py djangocloud ...`? See [Two ways to run it](#two-ways-to-run-it).)
 
 That's the whole idea: a few commands, from the project you already have.
 
@@ -23,7 +25,7 @@ You need a [DjangoCloud](https://djangocloud.dev) account with a card on file to
 ## What it looks like
 
 ```
-$ python manage.py djangocloud deploy
+$ djangocloud deploy
 You're not signed in yet.
 Open https://djangocloud.dev/dashboard/cli/?code=ABCD-EFGH and check that the code is ABCD-EFGH.
 ✓ Signed in as you@example.com
@@ -43,9 +45,23 @@ Deploying my-shop
 
 ## Features
 
-### Everything runs through `manage.py`
+### Two ways to run it
 
-All commands live under `python manage.py djangocloud`. Run it with no arguments, or use `help`, to see them all.
+**`djangocloud <command>`** works as soon as the package is installed. There is nothing to add to your project, and it
+still works when your settings won't load.
+
+**`python manage.py djangocloud <command>`** does the same thing from inside your project, but Django only finds a
+management command in an installed app. Add the app first, or you will see `Unknown command: 'djangocloud'`:
+
+```python
+INSTALLED_APPS = [
+    ...,
+    "djangocloud_cli",
+]
+```
+
+The rest of this page writes `djangocloud`; use whichever form you prefer. Run it with no arguments, or use `help`,
+to see every command.
 
 | Command | What it does |
 |---|---|
@@ -58,9 +74,6 @@ All commands live under `python manage.py djangocloud`. Run it with no arguments
 | `logs` | Show a project's logs *(coming)* |
 | `status` | Show the current release and its state *(coming)* |
 | `help [command]` | Help for everything, or for one command |
-
-A standalone `djangocloud` command is installed as well, with the same commands and no `manage.py`. It's handy when
-your project's settings won't load.
 
 ### Smooth, guided setup
 
@@ -118,7 +131,7 @@ message if something is missing.
 
 ```yaml
 - run: pip install djangocloud-cli
-- run: python manage.py djangocloud deploy --no-input --project my-shop
+- run: djangocloud deploy --no-input --project my-shop
   env:
     DJANGOCLOUD_TOKEN: ${{ secrets.DJANGOCLOUD_TOKEN }}
 ```
