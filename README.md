@@ -71,9 +71,29 @@ to see every command.
 | `link` | Pick or create the project this folder deploys to |
 | `unlink` | Detach this folder from its project |
 | `deploy` | Link the folder if needed, pack it, upload it and stream the release until it is live (`--github` deploys the linked repo's latest commit instead) |
-| `logs` | Show a project's logs *(coming)* |
-| `status` | Show the current release and its state *(coming)* |
+| `logs` | Show a project's logs; `-f` follows them, `--source app\|build\|release`, `--since 2h`, `-n 200` |
+| `status` | Is it live and answering? Shows the URL, size and latest releases; `--json` for scripts |
 | `help [command]` | Help for everything, or for one command |
+
+### Status and logs
+
+```
+$ djangocloud status
+My Shop  ● Live
+  v2 is live.
+  URL       https://my-shop.example.com
+  Size      Nano × 1 · eu-central-1
+  Checked   3 min ago
+
+  Releases
+    v2   active      2 h ago  b3f9c1a  live
+    v1   superseded  1 d ago
+
+$ djangocloud logs -f --source app
+```
+
+`status` exits with 1 when the server is not responding, so it works as a check in a script. Both commands act on the
+project this folder is linked to, or on `--project <slug>`. `logs -f` keeps streaming until you press Ctrl-C.
 
 ### Smooth, guided setup
 

@@ -37,6 +37,32 @@ class FakeApi:
         self.requests = []
         self.token = "dcl_testtoken"
         self.release_polls = 0
+        self.old_server = False  # answer the new endpoints like a server that predates them (an HTML 404)
+        release = {"status": "active", "git_sha": "b" * 40, "created_at": "2026-10-07T10:00:00+00:00"}
+        older = {"status": "superseded", "git_sha": "", "created_at": "2026-10-06T10:00:00+00:00"}
+        self.detail = {
+            "id": 1,
+            "slug": "my-shop",
+            "name": "My Shop",
+            "region": "eu-central-1",
+            "power": "nano",
+            "scale": 1,
+            "tier": "connect",
+            "url": "https://my-shop.example.test",
+            "status": {"label": "Live", "tone": "green", "detail": "v2 is live."},
+            "health": {"state": "healthy", "checked_at": None, "since": None, "error": ""},
+            "live_release": {"id": 2, "version": 2, "status": "active"},
+            "releases": [{"id": 2, "version": 2, **release}, {"id": 1, "version": 1, **older}],
+        }
+        self.log_requests = []
+        self.log_polls = 0
+        line = {"at": "2026-10-07T10:00:00+00:00", "source": "app", "level": "info"}
+        first = [{"id": 1, **line, "message": "booting"}, {"id": 2, **line, "message": "[red]not markup[/red]"}]
+        self.log_script = [
+            {"lines": first, "cursor": 2},
+            {"lines": [{"id": 3, **line, "level": "error", "message": "it broke"}], "cursor": 3},
+            {"lines": [], "cursor": 3},
+        ]
 
     def handler(api):
         class Handler(BaseHTTPRequestHandler):
@@ -103,6 +129,23 @@ class FakeApi:
                     logs = [line for line in step.pop("logs") if line["id"] > after]
                     return self._reply(200, {"id": 1, "version": 1, **step, "logs": logs,
                                              "cursor": logs[-1]["id"] if logs else after})  # fmt: skip
+                if parsed.path.startswith("/api/v1/projects/") and parsed.path.split("/")[4:5] != ["", "releases"]:
+                    if api.old_server:
+                        body = b"<h1>Not Found</h1>"
+                        self.send_response(404)
+                        self.send_header("Content-Type", "text/html")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                        return
+                    if not self._authed():
+                        return
+                    if parsed.path.endswith("/logs"):
+                        api.log_requests.append(parse_qs(parsed.query))
+                        step = api.log_script[min(api.log_polls, len(api.log_script) - 1)]
+                        api.log_polls += 1
+                        return self._reply(200, step)
+                    return self._reply(200, api.detail)
                 if self.path == "/api/v1/sizes":
                     return self._reply(200, {"sizes": [
                         {"power": "nano", "label": "Nano", "vcpu": 0.25, "ram_gb": 0.5, "price_cents": 1000},

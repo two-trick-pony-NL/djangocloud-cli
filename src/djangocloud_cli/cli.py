@@ -1,9 +1,13 @@
 """`djangocloud` command: one parser shared by the standalone script and `manage.py djangocloud`."""
 
 import argparse
+import json
+import re
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime
+from urllib.parse import urlencode
 
 from . import __version__, auth, config, detect, link, package
 from .api import ApiError, Client
@@ -67,12 +71,16 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
         help="Deploy the latest commit of the project's linked GitHub repo instead of uploading this folder",
     )
     sub.add_parser("unlink", help="Detach this folder from its project")
-    sub.add_parser("status", help="Show the current release and its state")
+    status = sub.add_parser("status", help="Show whether the project is live, and its latest releases")
+    status.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
+    status.add_argument("--json", action="store_true", help="Print the raw details as JSON, for scripts")
 
     logs = sub.add_parser("logs", help="Show a project's logs")
-    logs.add_argument("-f", "--follow", action="store_true", help="Keep streaming new lines")
+    logs.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
+    logs.add_argument("-f", "--follow", action="store_true", help="Keep streaming new lines (Ctrl-C to stop)")
+    logs.add_argument("-n", "--lines", type=int, default=100, help="How many of the latest lines to show (default 100)")
     logs.add_argument("--source", choices=["app", "build", "release"], help="Only this kind of log line")
-    logs.add_argument("--since", metavar="DURATION", help="Only lines newer than this, e.g. 2h")
+    logs.add_argument("--since", metavar="DURATION", help="Only lines newer than this: 90s, 30m, 2h or 7d")
 
     helper = sub.add_parser("help", help="Show this help")
     helper.add_argument("topic", nargs="?", help="A command to get help for")
@@ -381,6 +389,121 @@ def cmd_deploy(args, root) -> int:
     return follow(client, release)
 
 
+# ---------- status and logs ----------
+
+TONES = {"green": "green", "yellow": "yellow", "red": "red", "gray": "dim"}
+LEVEL_STYLES = {"error": "red", "critical": "red", "warning": "yellow"}
+SINCE_RE = re.compile(r"^\d{1,5}[smhd]$")
+OLD_SERVER = "This DjangoCloud server doesn't support that yet. Try again after its next release."
+
+
+def resolve_project(client: Client, root, args) -> dict:
+    """The project to act on: --project <slug>, else the one this folder is linked to."""
+    if getattr(args, "project", None):
+        match = next((p for p in client.get("/projects")["projects"] if p["slug"] == args.project), None)
+        if match is None:
+            raise CliError(f"No project {args.project!r} on your account.")
+        return match
+    linked = link.load(root)
+    if linked and linked.get("id"):
+        return linked
+    raise CliError(f"This folder isn't linked to a project. Run '{say('link')}' or pass --project <slug>.")
+
+
+def get_or_explain(client: Client, path: str) -> dict:
+    """GET, turning a plain 404 (a server that predates the endpoint) into a clear message."""
+    try:
+        return client.get(path)
+    except ApiError as exc:
+        if exc.status == 404 and exc.code == "http_error":
+            raise CliError(OLD_SERVER) from None
+        raise
+
+
+def ago(iso: str | None, now: datetime | None = None) -> str:
+    if not iso:
+        return "never"
+    then = datetime.fromisoformat(iso)
+    seconds = max(0, int(((now or datetime.now(UTC)) - then).total_seconds()))
+    for limit, unit, size in ((60, "s", 1), (3600, "min", 60), (86400, "h", 3600)):
+        if seconds < limit:
+            return "just now" if seconds < 5 and unit == "s" else f"{seconds // size} {unit} ago"
+    return f"{seconds // 86400} d ago"
+
+
+def cmd_status(args, root) -> int:
+    client = make_client()
+    ensure_login(client)
+    project = resolve_project(client, root, args)
+    detail = get_or_explain(client, f"/projects/{project['id']}")
+    status = detail["status"]
+    if args.json:
+        console.print_json(json.dumps(detail))
+        return 1 if status["tone"] == "red" else 0
+    tone = TONES.get(status["tone"], "white")
+    console.print(f"[bold]{detail['name'] or detail['slug']}[/bold]  [{tone}]● {status['label']}[/{tone}]")
+    console.print(f"  [dim]{status['detail']}[/dim]")
+    if detail["url"]:
+        console.print(f"  URL       {detail['url']}")
+    console.print(f"  Size      {detail['power'].capitalize()} × {detail['scale']} · {detail['region']}")  # noqa: RUF001 - the multiplication sign is intentional
+    health = detail["health"]
+    if health["state"] != "unknown":
+        console.print(f"  Checked   {ago(health['checked_at'])}" + (f" ({health['error']})" if health["error"] else ""))
+    releases = detail["releases"]
+    if releases:
+        console.print("\n  Releases")
+        for release in releases:
+            sha = f"  {release['git_sha'][:7]}" if release["git_sha"] else ""
+            live = "  [green]live[/green]" if release["status"] == "active" else ""
+            console.print(
+                f"    v{release['version']:<4} {release['status']:<11} {ago(release['created_at'])}{sha}{live}"
+            )
+    else:
+        console.print(f"\n  Nothing deployed yet. Run '{say('deploy')}'.")
+    return 1 if status["tone"] == "red" else 0
+
+
+def print_logline(line: dict) -> None:
+    when = datetime.fromisoformat(line["at"]).astimezone().strftime("%H:%M:%S")
+    style = LEVEL_STYLES.get(line.get("level", "info"))
+    message = line["message"].replace("[", "\\[")  # a log line is text, never rich markup
+    body = f"[{style}]{message}[/{style}]" if style else message
+    console.print(f"[dim]{when} {line['source']:<7}[/dim] {body}", highlight=False)
+
+
+def cmd_logs(args, root) -> int:
+    if args.since and not SINCE_RE.match(args.since):
+        raise CliError("--since must look like 90s, 30m, 2h or 7d.")
+    client = make_client()
+    ensure_login(client)
+    project = resolve_project(client, root, args)
+    base = f"/projects/{project['id']}/logs"
+    filters = {k: v for k, v in (("source", args.source), ("since", args.since)) if v}
+    page = get_or_explain(client, f"{base}?{urlencode({**filters, 'lines': max(1, args.lines)})}")
+    for line in page["lines"]:
+        print_logline(line)
+    if not page["lines"] and not args.follow:
+        console.print("[dim]No log lines match.[/dim]")
+    if not args.follow:
+        return 0
+    cursor, failures = page["cursor"], 0
+    try:
+        while True:
+            _sleep(POLL_INTERVAL)
+            try:
+                page = client.get(f"{base}?{urlencode({**filters, 'after': cursor})}")
+                failures = 0
+            except ApiError as exc:
+                if exc.code != "unreachable" or (failures := failures + 1) > 5:
+                    raise
+                continue
+            for line in page["lines"]:
+                print_logline(line)
+            cursor = page["cursor"]
+    except KeyboardInterrupt:
+        return 0  # stopping a follow is the normal way to end it
+
+
 COMMANDS = {
     "login": cmd_login,
     "logout": cmd_logout,
@@ -388,6 +511,8 @@ COMMANDS = {
     "link": cmd_link,
     "unlink": cmd_unlink,
     "deploy": cmd_deploy,
+    "status": cmd_status,
+    "logs": cmd_logs,
 }
 
 
