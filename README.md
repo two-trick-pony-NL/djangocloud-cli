@@ -79,8 +79,7 @@ to see every command.
 | `rollback` | Go back to an earlier release: `rollback 3`, or pick from a list. `-y` skips the question, `--no-wait` returns once queued |
 | `scale` | Change the server size and number of instances: `--size small --instances 3`; `-y` skips the question, `--no-wait` returns once queued |
 | `teardown` | Delete a project and what it created in AWS. You type its name to confirm (`--yes` for scripts) |
-| `help` | Every command with all of its options. `help <command>` for one |
-| `help [command]` | Help for everything, or for one command |
+| `help [command]` | Every command with all of its options, or the help for one command |
 
 ### Status and logs
 
