@@ -74,6 +74,8 @@ to see every command.
 | `deploy` | Link the folder if needed, pack it, upload it and stream the release until it is live (`--github` deploys the linked repo's latest commit instead) |
 | `logs` | Show a project's logs; `-f` follows them, `--source app\|build\|release`, `--since 2h`, `-n 200` |
 | `status` | Is it live and answering? Shows the URL, size and latest releases; `--json` for scripts |
+| `env push` | Set environment variables from a `.env` file, or from named variables in CI (`--from-env`); `--prune` also removes the rest, `--dry-run` shows what would change |
+| `env list` | Show the names of a project's variables (never their values) |
 | `scale` | Change the server size and number of instances: `--size small --instances 3`; `-y` skips the question, `--no-wait` returns once queued |
 | `teardown` | Delete a project and what it created in AWS. You type its name to confirm (`--yes` for scripts) |
 | `help [command]` | Help for everything, or for one command |
@@ -154,6 +156,56 @@ then the source of truth, so edit it to change how your app is built:
 
 The server checks every setting and lists all problems at once. The full list with defaults is at
 `/api/v1/build-config`. If your WSGI app can't be detected in CI, pass `--wsgi-module config.wsgi:application`.
+
+### Environment variables
+
+Your app's settings (secret key, database URL, API keys) live on the project as encrypted environment variables, not
+in the upload. Set them in the dashboard, or from the command line:
+
+```
+$ djangocloud env push production.env
+my-shop: 1 new, 28 to overwrite (values are never shown).
+  new: SENTRY_DSN
+  overwrite: ALLOWED_HOSTS, DATABASE_URL, DJANGO_SECRET_KEY, ...
+✓ Saved 29 variable(s). They apply from the next deploy.
+```
+
+- **Nothing is ever printed back.** The output lists names only, and the server never returns a value.
+- **Merge by default.** Variables you don't send are left alone. Pass `--prune` to remove everything else, which asks
+  first (`-y` skips the question). Variables DjangoCloud sets itself, like `DJANGOCLOUD_HOSTED_DB_*` for a database it
+  created, are never removed.
+- **All or nothing.** If a line in the file is invalid, nothing is sent, and the error names the line.
+- **Try it first** with `--dry-run`: it shows which names are new and which would be overwritten, and changes nothing.
+- **Applies from the next deploy.** Run `djangocloud deploy` afterwards.
+- `djangocloud env list` shows the names currently set. Use `--project <slug>` on either command to act on a
+  project other than the linked one.
+
+The file is read as a `.env` file: comments, `export KEY=value`, single and double quotes and multi-line quoted values
+(such as a PEM key) work, and `$VAR` is not expanded. Use `-` to read from standard input.
+
+#### From CI: keep your secrets in one place
+
+In GitHub Actions, secrets aren't files, so name the variables to send. Map each secret to a variable of the same name
+and list the names with `--from-env`. Empty values are skipped (and reported by name), so optional secrets can stay
+unset:
+
+```yaml
+- run: >
+    uvx --from djangocloud-cli djangocloud --no-input env push
+    --from-env DJANGO_SECRET_KEY DATABASE_URL STRIPE_SECRET_KEY SENTRY_DSN
+  env:
+    DJANGOCLOUD_TOKEN: ${{ secrets.DJANGOCLOUD_TOKEN }}
+    DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+    DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+    SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+- run: uvx --from djangocloud-cli djangocloud --no-input deploy
+  env:
+    DJANGOCLOUD_TOKEN: ${{ secrets.DJANGOCLOUD_TOKEN }}
+```
+
+Rotating a secret is then: change it in GitHub, re-run the workflow. `env push` needs a DjangoCloud server that
+supports it; an older one answers "doesn't support that yet".
 
 ### Safe sign-in
 

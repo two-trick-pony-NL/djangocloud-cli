@@ -35,6 +35,9 @@ class FakeApi:
             },
         ]
         self.requests = []
+        self.env_existing = []  # names already on the project
+        self.env_saved = []  # bodies of PUT /projects/<id>/env
+        self.env_error = None  # (status, body) to answer PUT /projects/<id>/env with
         self.plan = "starter"
         self.scale_requests = []
         self.resize_polls = 0
@@ -114,6 +117,14 @@ class FakeApi:
                 api.uploads.append((project_id, body["fields"], body["data"]))
                 return self._reply(202, {"id": 1, "version": 1, "status": "queued", "done": False, "ok": False})
 
+            def _reply_html_404(self):
+                body = b"<h1>Not Found</h1>"
+                self.send_response(404)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
             def _authed(self):
                 if self.headers.get("Authorization") == f"Bearer {api.token}":
                     return True
@@ -151,6 +162,9 @@ class FakeApi:
                         return
                     if not self._authed():
                         return
+                    if parsed.path.endswith("/env"):
+                        return self._reply(200, {"variables": [{"key": k, "updated_at": "2026-10-08T10:00:00+00:00"}
+                                                               for k in api.env_existing], "max": 200})  # fmt: skip
                     if parsed.path.endswith("/logs"):
                         api.log_requests.append(parse_qs(parsed.query))
                         step = api.log_script[min(api.log_polls, len(api.log_script) - 1)]
@@ -256,6 +270,13 @@ class FakeApi:
                     api.aws, api.setup_step = True, "ready"
                     return self._reply(200, {"connected": True, "region": body["region"],
                                              "account_id": "123456789012"})  # fmt: skip
+                if self.path.endswith("/env"):
+                    if api.old_server:
+                        return self._reply_html_404()
+                    if api.env_error:
+                        return self._reply(*api.env_error)
+                    api.env_saved.append(body)
+                    return self._reply(200, {"created": sorted(body["variables"]), "updated": [], "removed": []})
                 self._reply(404, {"error": "not_found", "message": "nope"})
 
             def do_DELETE(self):

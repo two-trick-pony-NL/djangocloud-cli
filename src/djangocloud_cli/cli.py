@@ -2,14 +2,16 @@
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urlencode
 
-from . import __version__, auth, config, detect, link, onboarding, package
+from . import __version__, auth, config, detect, envfile, link, onboarding, package
 from .api import ApiError, Client
 from .ui import CliError, NotInteractive, confirm, console, err, interactive, no_input, select, set_no_input, text
 
@@ -91,6 +93,28 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
     scale.add_argument("--instances", type=int, help="How many instances to run (1-20)")
     scale.add_argument("-y", "--yes", action="store_true", help="Don't ask for confirmation")
     scale.add_argument("--no-wait", action="store_true", help="Return as soon as the change is queued")
+
+    env = sub.add_parser("env", help="Manage a project's environment variables (push them from a file or from CI)")
+    env_sub = env.add_subparsers(dest="env_command", metavar="<push|list>", required=True)
+    push = env_sub.add_parser(
+        "push",
+        help="Set variables from a .env file, or from named variables in the environment (--from-env)",
+        description="Set environment variables on a project. They are stored encrypted and reach the app from the "
+        "next deploy. Values are never printed. Other variables on the project are left alone unless you pass --prune.",
+    )
+    push.add_argument("file", nargs="?", help="A .env file to read ('-' for standard input)")
+    push.add_argument(
+        "--from-env",
+        nargs="+",
+        metavar="NAME",
+        help="Read these variables from the current environment instead (in CI: the ones you map from secrets)",
+    )
+    push.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
+    push.add_argument("--prune", action="store_true", help="Also remove the project's variables that you did not send")
+    push.add_argument("--dry-run", action="store_true", help="Show what would change, without changing anything")
+    push.add_argument("-y", "--yes", action="store_true", help="Don't ask for confirmation when removing")
+    env_list = env_sub.add_parser("list", help="List the names of a project's variables (never their values)")
+    env_list.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
 
     teardown = sub.add_parser("teardown", help="Delete a project and everything it created in AWS")
     teardown.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
@@ -666,7 +690,81 @@ def cmd_teardown(args, root) -> int:
     return 0
 
 
+PLATFORM_PREFIXES = ("DJANGOCLOUD_HOSTED_DB_",)  # set by DjangoCloud itself; --prune never removes them
+
+
+def _env_path(project: dict) -> str:
+    return f"/projects/{project['id']}/env"
+
+
+def _collect_env(args) -> dict[str, str]:
+    """The variables to send: from a file, or named variables of the current environment."""
+    if bool(args.file) == bool(args.from_env):
+        raise CliError("Give either a .env file or --from-env NAME [NAME ...], not both and not neither.")
+    if args.from_env:
+        found = {name: os.environ[name] for name in args.from_env if os.environ.get(name)}
+        skipped = [name for name in args.from_env if name not in found]
+        if skipped:
+            err.print(f"[yellow]Skipped (not set or empty):[/yellow] {', '.join(skipped)}")
+        return found
+    if args.file == "-":
+        content = sys.stdin.read()
+    else:
+        try:
+            content = Path(args.file).read_text()
+        except OSError as exc:
+            raise CliError(f"Couldn't read {args.file}: {exc.strerror}.") from None
+    variables, errors = envfile.parse(content)
+    if errors:
+        raise CliError("Nothing was sent. " + " ".join(errors[:5]))
+    return variables
+
+
+def cmd_env(args, root) -> int:
+    client = make_client()
+    ensure_login(client)
+    project = resolve_project(client, root, args)
+    if args.env_command == "list":
+        names = [v["key"] for v in get_or_explain(client, _env_path(project))["variables"]]
+        console.print(f"[bold]{project['slug']}[/bold]: {len(names)} variable(s)")
+        for name in names:
+            console.print(f"  {name}")
+        return 0
+    variables = _collect_env(args)
+    if not variables and not args.prune:
+        raise CliError("There is nothing to send: no variables were found.")
+    existing = {v["key"] for v in get_or_explain(client, _env_path(project))["variables"]}
+    creating, updating = sorted(set(variables) - existing), sorted(set(variables) & existing)
+    removing = sorted(k for k in existing - set(variables) if not k.startswith(PLATFORM_PREFIXES)) if args.prune else []
+    console.print(
+        f"{project['slug']}: [bold]{len(creating)}[/bold] new, [bold]{len(updating)}[/bold] to overwrite"
+        + (f", [bold]{len(removing)}[/bold] to remove" if args.prune else "")
+        + " (values are never shown)."
+    )
+    for label, names in (("new", creating), ("overwrite", updating), ("remove", removing)):
+        if names:
+            console.print(f"  {label}: {', '.join(names)}")
+    if args.dry_run:
+        console.print("Dry run: nothing was changed.")
+        return 0
+    if (
+        removing
+        and not (args.yes or no_input())
+        and not confirm(f"Remove {len(removing)} variable(s) from the project?")
+    ):
+        raise CliError("Cancelled. Nothing was changed.")
+    try:
+        client.put(_env_path(project), {"variables": variables, "replace": args.prune})
+    except ApiError as exc:
+        if exc.status == 404 and exc.code == "http_error":
+            raise CliError(OLD_SERVER) from None
+        raise
+    console.print(f"[green]✓[/green] Saved {len(variables)} variable(s). They apply from the next deploy.")
+    return 0
+
+
 COMMANDS = {
+    "env": cmd_env,
     "login": cmd_login,
     "setup": cmd_setup,
     "scale": cmd_scale,
