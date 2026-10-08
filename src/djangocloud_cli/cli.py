@@ -9,9 +9,9 @@ import time
 from datetime import UTC, datetime
 from urllib.parse import urlencode
 
-from . import __version__, auth, config, detect, link, package
+from . import __version__, auth, config, detect, link, onboarding, package
 from .api import ApiError, Client
-from .ui import NotInteractive, confirm, console, err, interactive, no_input, select, set_no_input, text
+from .ui import CliError, NotInteractive, confirm, console, err, interactive, no_input, select, set_no_input, text
 
 STANDALONE = "djangocloud"
 MANAGE_PY = "python manage.py djangocloud"
@@ -40,6 +40,11 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
     sub.add_parser("login", help="Sign in (approve a code in your browser)")
+    setup = sub.add_parser("setup", help="Guided setup: account, card, hosted or your own AWS, AWS keys")
+    setup_where = setup.add_mutually_exclusive_group()
+    setup_where.add_argument("--hosted", action="store_true", help="We run it for you (no AWS keys needed)")
+    setup_where.add_argument("--own-cloud", action="store_true", help="It runs in your own AWS account")
+    setup.add_argument("--region", help=f"AWS region for your own account (keys come from {onboarding.AWS_KEY_ENV})")
     sub.add_parser("logout", help="Forget the stored token")
     sub.add_parser("whoami", help="Show who you are signed in as")
 
@@ -82,13 +87,20 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
     logs.add_argument("--source", choices=["app", "build", "release"], help="Only this kind of log line")
     logs.add_argument("--since", metavar="DURATION", help="Only lines newer than this: 90s, 30m, 2h or 7d")
 
+    scale = sub.add_parser("scale", help="Change a project's server size or number of instances")
+    scale.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
+    scale.add_argument("--size", help="Server size, e.g. small (see the sizes in 'status')")
+    scale.add_argument("--instances", type=int, help="How many instances to run (1-20)")
+    scale.add_argument("-y", "--yes", action="store_true", help="Don't ask for confirmation")
+    scale.add_argument("--no-wait", action="store_true", help="Return as soon as the change is queued")
+
+    teardown = sub.add_parser("teardown", help="Delete a project and everything it created in AWS")
+    teardown.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
+    teardown.add_argument("-y", "--yes", action="store_true", help="Don't ask you to type the project name")
+
     helper = sub.add_parser("help", help="Show this help")
     helper.add_argument("topic", nargs="?", help="A command to get help for")
     return parser
-
-
-class CliError(Exception):
-    pass
 
 
 def make_client() -> Client:
@@ -110,8 +122,14 @@ def ensure_login(client: Client) -> None:
             f"on your own machine run '{say('login')}'."
         )
     console.print("You're not signed in yet.")
-    auth.login(client)
+    sign_in(client)
     console.print(f"[green]✓[/green] Signed in as {client.get('/me')['email']}")
+
+
+def sign_in(client: Client) -> None:
+    """Sign in, or create the account first. Either way it ends with a code approved in the browser."""
+    new_account = select("Do you have a DjangoCloud account?", [("Yes, sign me in", False), ("No, create one", True)])
+    auth.login(client, new_account=new_account)
 
 
 def _price(cents: int) -> str:
@@ -202,6 +220,33 @@ def cmd_login(args, root) -> int:
     return 0
 
 
+def cmd_setup(args, root) -> int:
+    client = make_client()
+    ensure_login(client)
+    me = onboarding.run(client, site_url(), args, say)
+    where = "hosted by us" if me["plan"] in HOSTED_PLANS else f"in your own AWS account ({aws_region(client)})"
+    console.print(f"\n[green]✓[/green] All set. Your apps will run {where}.")
+    console.print(f"  Next: [bold]{say('deploy')}[/bold]")
+    return 0
+
+
+HOSTED_PLANS = ("company", "enterprise")
+
+
+def aws_region(client: Client) -> str:
+    return client.get("/aws").get("region", "")
+
+
+def ensure_set_up(client: Client, args) -> None:
+    """Before creating a project: if the account isn't ready and someone is at the keyboard, finish the setup first.
+    Without one, `preflight` names what's missing instead."""
+    if not interactive():
+        return
+    if client.get("/me").get("setup_step", "ready") != "ready":
+        console.print("Let's finish setting up your account first.")
+        onboarding.run(client, site_url(), args, say)
+
+
 def cmd_whoami(args, root) -> int:
     client = make_client()
     if not client.token:
@@ -229,6 +274,7 @@ def cmd_logout(args, root) -> int:
 def cmd_link(args, root) -> int:
     client = make_client()
     ensure_login(client)
+    ensure_set_up(client, args)
     ensure_linked(client, root, args, force=True)
     return 0
 
@@ -357,6 +403,8 @@ def follow(client: Client, release: dict) -> int:
 def cmd_deploy(args, root) -> int:
     client = make_client()
     ensure_login(client)
+    if not link.load(root):  # a linked folder already went through setup
+        ensure_set_up(client, args)
     project = ensure_linked(client, root, args)
     console.print(f"Deploying [bold]{project['slug']}[/bold]")
     preflight(client, project["slug"])
@@ -504,8 +552,129 @@ def cmd_logs(args, root) -> int:
         return 0  # stopping a follow is the normal way to end it
 
 
+# ---------- scale and teardown ----------
+
+SCALE_TIMEOUT = 15 * 60
+MAX_INSTANCES = 20
+
+
+def _project_detail(client: Client, project: dict) -> dict:
+    return get_or_explain(client, f"/projects/{project['id']}")
+
+
+def _size_choices(sizes: list[dict], detail: dict) -> list[tuple[str, str]]:
+    hosted = detail.get("hosted")
+    choices = []
+    for size in sizes:
+        cents = size["price_cents"] if hosted else _aws_cents(size)
+        specs = f"{size['vcpu']:g} vCPU, {size['ram_gb']:g} GB RAM"
+        now = "  (current)" if size["power"] == detail["power"] else ""
+        choices.append((f"{size['label']:<8} {specs:<22} ~{_price(cents)}/month each{now}", size["power"]))
+    return choices
+
+
+def _per_month(sizes: list[dict], detail: dict, power: str, scale: int) -> str:
+    size = next(s for s in sizes if s["power"] == power)
+    cents = (size["price_cents"] if detail.get("hosted") else _aws_cents(size)) * scale
+    return f"~{_price(cents)}/month " + ("on your plan" if detail.get("hosted") else "on your AWS bill")
+
+
+def cmd_scale(args, root) -> int:
+    client = make_client()
+    ensure_login(client)
+    project = resolve_project(client, root, args)
+    detail = _project_detail(client, project)
+    sizes = client.get("/sizes")["sizes"]
+    power, instances = args.size, args.instances
+    if power is None and instances is None:
+        power = select("Server size", _size_choices(sizes, detail))
+        instances = int(text("How many instances? (1-20)", default=str(detail["scale"])) or detail["scale"])
+    power, instances = power or detail["power"], instances or detail["scale"]
+    if power not in {s["power"] for s in sizes}:
+        raise CliError(f"Unknown size {power!r}. Choose from: {', '.join(s['power'] for s in sizes)}.")
+    if not 1 <= instances <= MAX_INSTANCES:
+        raise CliError(f"Choose between 1 and {MAX_INSTANCES} instances.")
+    if (power, instances) == (detail["power"], detail["scale"]):
+        console.print(f"[bold]{detail['slug']}[/bold] is already {power.capitalize()} × {instances}.")  # noqa: RUF001
+        return 0
+    cost = _per_month(sizes, detail, power, instances)
+    console.print(
+        f"{detail['slug']}: {detail['power'].capitalize()} × {detail['scale']} → "  # noqa: RUF001
+        f"[bold]{power.capitalize()} × {instances}[/bold]  ({cost})"  # noqa: RUF001
+    )
+    if not (args.yes or no_input()) and not confirm("Apply this change?"):
+        raise CliError("Cancelled. Nothing was changed.")
+    try:
+        queued = client.post(f"/projects/{detail['id']}/scale", {"power": power, "scale": instances})
+    except ApiError as exc:
+        raise explain(exc) from None
+    if args.no_wait:
+        console.print("[green]✓[/green] Queued. Check progress with " + f"'{say('status')}'.")
+        return 0
+    return follow_resize(client, queued)
+
+
+def follow_resize(client: Client, project: dict) -> int:
+    """Wait for the worker to apply a size change: pending, applying, then idle (done) or failed."""
+    started, failures = time.monotonic(), 0
+    try:
+        with console.status("Applying the change…"):
+            while True:
+                try:
+                    state = client.get(f"/projects/{project['id']}")
+                    failures = 0
+                except ApiError as exc:
+                    if exc.code != "unreachable" or (failures := failures + 1) > 5:
+                        raise
+                    _sleep(POLL_INTERVAL)
+                    continue
+                resize = state["resize"]
+                if resize["status"] in ("idle", "failed"):
+                    break
+                if time.monotonic() - started > SCALE_TIMEOUT:
+                    raise CliError("Still not finished after 15 minutes. It keeps running; check 'status' later.")
+                _sleep(POLL_INTERVAL)
+    except KeyboardInterrupt:
+        err.print("\nStopped watching. The change keeps being applied on DjangoCloud.")
+        return 130
+    if resize["status"] == "failed":
+        err.print(f"[red]✗ The change failed.[/red] {resize['error'] or 'See the dashboard for details.'}")
+        return 1
+    console.print(f"[green]✓[/green] {state['slug']} now runs {state['power'].capitalize()} × {state['scale']}.")  # noqa: RUF001
+    return 0
+
+
+def cmd_teardown(args, root) -> int:
+    client = make_client()
+    ensure_login(client)
+    project = resolve_project(client, root, args)
+    detail = _project_detail(client, project)
+    slug = detail["slug"]
+    console.print(
+        f"This deletes [bold]{slug}[/bold] and removes what it created in AWS (servers, images, any database)."
+    )
+    console.print("Its logs and releases go with it. This cannot be undone.")
+    if not args.yes:
+        if no_input():
+            raise CliError(f"Pass --yes to tear down {slug} without being asked.")
+        if text(f"Type {slug} to confirm").strip() != slug:
+            raise CliError("That doesn't match. Nothing was deleted.")
+    try:
+        client.delete(f"/projects/{detail['id']}", {"confirm": slug})
+    except ApiError as exc:
+        raise explain(exc) from None
+    linked = link.load(root)
+    if linked and linked.get("id") == detail["id"]:
+        link.remove(root)
+    console.print(f"[green]✓[/green] {slug} is deleted. The AWS resources are being removed in the background.")
+    return 0
+
+
 COMMANDS = {
     "login": cmd_login,
+    "setup": cmd_setup,
+    "scale": cmd_scale,
+    "teardown": cmd_teardown,
     "logout": cmd_logout,
     "whoami": cmd_whoami,
     "link": cmd_link,

@@ -63,6 +63,12 @@ class Client:
     def post(self, path: str, data: dict | None = None) -> dict:
         return self.request("POST", path, data or {})
 
+    def put(self, path: str, data: dict | None = None) -> dict:
+        return self.request("PUT", path, data or {})
+
+    def delete(self, path: str, data: dict | None = None) -> dict:
+        return self.request("DELETE", path, data or {})
+
     def upload(
         self, path: str, *, fields: dict[str, str], file_field: str, filename: str, content: bytes | None
     ) -> dict:

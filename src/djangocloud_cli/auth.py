@@ -3,16 +3,35 @@
 import contextlib
 import time
 import webbrowser
+from urllib.parse import quote, urlsplit
 
 from . import config
 from .api import ApiError, Client
 from .ui import console
 
 
-def login(client: Client, *, sleep=time.sleep, open_browser=webbrowser.open, client_name: str = "cloud CLI") -> str:
+def signup_url(verification_url: str) -> str:
+    """The sign-up page that, once the account exists, lands on the same approval page as the login would."""
+    parts = urlsplit(verification_url)
+    approve = parts.path + (f"?{parts.query}" if parts.query else "")
+    return f"{parts.scheme}://{parts.netloc}/signup/?next={quote(approve, safe='')}"
+
+
+def login(
+    client: Client,
+    *,
+    sleep=time.sleep,
+    open_browser=webbrowser.open,
+    client_name: str = "cloud CLI",
+    new_account: bool = False,
+) -> str:
+    """Sign in by approving a code in the browser. `new_account` opens the sign-up page first: nothing is typed here."""
     started = client.post("/auth/device", {"client_name": client_name})
     url, code = started["verification_uri_complete"], started["user_code"]
-    console.print(f"\nOpen [link={url}]{url}[/link]\nand check that the code is [bold]{code}[/bold].\n")
+    if new_account:
+        url = signup_url(url)
+    what = "Create your account at" if new_account else "Open"
+    console.print(f"\n{what} [link={url}]{url}[/link]\nand check that the code is [bold]{code}[/bold].\n")
     with contextlib.suppress(Exception):  # no browser (SSH, CI) is fine: the URL is printed above
         open_browser(url)
 

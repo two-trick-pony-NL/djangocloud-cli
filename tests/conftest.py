@@ -35,6 +35,17 @@ class FakeApi:
             },
         ]
         self.requests = []
+        self.plan = "starter"
+        self.scale_requests = []
+        self.resize_polls = 0
+        self.deleted = []
+        self.aws_saved = []
+        self.setup_step = None  # "card" | "hosting" | "ready"; None answers like a server without guided setup
+        self.hosted_open = True
+        self.card_polls_until_active = 1
+        self.aws_error = None  # (status, body) to answer PUT /aws with
+        self.resize_states = ["applying", "idle"]  # what GET /projects/<id> says after a scale request
+        self.resize_error = ""
         self.token = "dcl_testtoken"
         self.release_polls = 0
         self.old_server = False  # answer the new endpoints like a server that predates them (an HTML 404)
@@ -145,7 +156,22 @@ class FakeApi:
                         step = api.log_script[min(api.log_polls, len(api.log_script) - 1)]
                         api.log_polls += 1
                         return self._reply(200, step)
-                    return self._reply(200, api.detail)
+                    detail = dict(api.detail)
+                    if api.scale_requests:
+                        state = api.resize_states[min(api.resize_polls, len(api.resize_states) - 1)]
+                        api.resize_polls += 1
+                        done = state == "idle"
+                        detail["resize"] = {
+                            "status": "failed" if api.resize_error else state,
+                            "error": api.resize_error,
+                            "power": "",
+                            "scale": 0,
+                        }
+                        if done and not api.resize_error:
+                            detail.update(power=api.scale_requests[-1]["power"], scale=api.scale_requests[-1]["scale"])
+                    else:
+                        detail["resize"] = {"status": "idle", "error": "", "power": "", "scale": 0}
+                    return self._reply(200, detail)
                 if self.path == "/api/v1/sizes":
                     return self._reply(200, {"sizes": [
                         {"power": "nano", "label": "Nano", "vcpu": 0.25, "ram_gb": 0.5, "price_cents": 1000},
@@ -154,10 +180,17 @@ class FakeApi:
                 if not self._authed():
                     return
                 if self.path == "/api/v1/me":
+                    extra = {"setup_step": api.setup_step, "plan": api.plan, "hosted_open": api.hosted_open}
                     return self._reply(200, {"email": "a@example.com", "subscription_active": api.card,
                                              "suspended": False, "aws_connected": api.aws,
                                              "can_host": api.can_host,
-                                             "ready_to_deploy": api.card and api.aws})  # fmt: skip
+                                             "ready_to_deploy": api.card and api.aws,
+                                             **({k: v for k, v in extra.items() if api.setup_step} or {})})  # fmt: skip
+                if self.path == "/api/v1/aws":
+                    return self._reply(200, {"connected": api.aws, "region": "eu-west-1" if api.aws else "",
+                                             "regions": [{"code": "eu-west-1", "label": "Europe (Ireland)"},
+                                                         {"code": "us-east-1", "label": "US East (N. Virginia)"}],
+                                             "policy": {"Statement": []}})  # fmt: skip
                 if self.path == "/api/v1/projects":
                     return self._reply(200, {"projects": api.projects})
                 self._reply(404, {"error": "not_found", "message": "nope"})
@@ -177,6 +210,28 @@ class FakeApi:
                     return self._reply(200, {"access_token": api.token, "token_type": "bearer"})
                 if not self._authed():
                     return
+                if self.path == "/api/v1/billing/checkout":
+                    return self._reply(200, {"active": False, "url": "https://checkout.example.test/cs_1",
+                                             "session_id": "cs_1"})  # fmt: skip
+                if self.path == "/api/v1/billing/confirm":
+                    if api.card_polls_until_active > 0:
+                        api.card_polls_until_active -= 1
+                        return self._reply(200, {"subscription_active": False, "suspended": False})
+                    api.card, api.setup_step = True, "hosting"
+                    return self._reply(200, {"subscription_active": True, "suspended": False})
+                if self.path == "/api/v1/setup/hosting":
+                    if body["hosting"] == "hosted":
+                        if not api.hosted_open:
+                            return self._reply(403, {"error": "hosted_not_available", "message": "Not open yet."})
+                        api.plan, api.setup_step, api.can_host = "company", "ready", True
+                    else:
+                        api.plan = "starter"
+                    return self._reply(200, {})
+                if self.path.endswith("/scale"):
+                    api.scale_requests.append(body)
+                    pending = {"status": "pending", "error": "", "power": "", "scale": 0}
+                    return self._reply(202, {"id": 1, "slug": "my-shop", "power": "nano", "scale": 1,
+                                             "resize": pending})  # fmt: skip
                 if self.path.startswith("/api/v1/projects/") and self.path.endswith("/releases"):
                     return self._release(body)
                 if self.path == "/api/v1/projects":
@@ -187,6 +242,32 @@ class FakeApi:
                                "hosted": bool(body.get("hosted"))}  # fmt: skip
                     api.projects.append(project)
                     return self._reply(201, project)
+                self._reply(404, {"error": "not_found", "message": "nope"})
+
+            def do_PUT(self):
+                body = self._body()
+                api.requests.append(("PUT", self.path, body))
+                if not self._authed():
+                    return
+                if self.path == "/api/v1/aws":
+                    if api.aws_error:
+                        return self._reply(*api.aws_error)
+                    api.aws_saved.append(body)
+                    api.aws, api.setup_step = True, "ready"
+                    return self._reply(200, {"connected": True, "region": body["region"],
+                                             "account_id": "123456789012"})  # fmt: skip
+                self._reply(404, {"error": "not_found", "message": "nope"})
+
+            def do_DELETE(self):
+                body = self._body()
+                api.requests.append(("DELETE", self.path, body))
+                if not self._authed():
+                    return
+                if self.path.startswith("/api/v1/projects/"):
+                    if body.get("confirm") != api.detail["slug"]:
+                        return self._reply(400, {"error": "confirmation_required", "message": "Send the slug."})
+                    api.deleted.append(self.path)
+                    return self._reply(202, {"slug": body["confirm"], "deleted": True})
                 self._reply(404, {"error": "not_found", "message": "nope"})
 
         return Handler

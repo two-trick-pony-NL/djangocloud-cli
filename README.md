@@ -65,6 +65,7 @@ to see every command.
 
 | Command | What it does |
 |---|---|
+| `setup` | Guided first run: create your account, add a card, choose hosted or your own AWS, connect your AWS keys |
 | `login` | Sign in by approving a code in your browser |
 | `logout` | Forget the stored token |
 | `whoami` | Show who you're signed in as, and which project this folder deploys to |
@@ -73,6 +74,8 @@ to see every command.
 | `deploy` | Link the folder if needed, pack it, upload it and stream the release until it is live (`--github` deploys the linked repo's latest commit instead) |
 | `logs` | Show a project's logs; `-f` follows them, `--source app\|build\|release`, `--since 2h`, `-n 200` |
 | `status` | Is it live and answering? Shows the URL, size and latest releases; `--json` for scripts |
+| `scale` | Change the server size and number of instances: `--size small --instances 3`; `-y` skips the question, `--no-wait` returns once queued |
+| `teardown` | Delete a project and what it created in AWS. You type its name to confirm (`--yes` for scripts) |
 | `help [command]` | Help for everything, or for one command |
 
 ### Status and logs
@@ -95,7 +98,22 @@ $ djangocloud logs -f --source app
 `status` exits with 1 when the server is not responding, so it works as a check in a script. Both commands act on the
 project this folder is linked to, or on `--project <slug>`. `logs -f` keeps streaming until you press Ctrl-C.
 
-### Smooth, guided setup
+### Guided setup
+
+`djangocloud setup` (also offered automatically before your first project) walks through it, and picks up where it
+stopped if you run it again:
+
+1. **Account.** No account yet? Choose "No, create one": the sign-up page opens in your browser and returns to the
+   login approval. Nothing is typed into the terminal.
+2. **Card.** Opens Stripe Checkout in your browser and waits until the card is on file.
+3. **Hosted or your own AWS.** Hosted means we run it in an AWS environment made for you; there are no keys to hand
+   over. Your own AWS asks for an IAM access key (the secret is hidden as you type, and goes to DjangoCloud once, over
+   HTTPS), checks it against AWS, and asks for a region. You can print the IAM policy the key needs to see exactly what it is allowed to do.
+
+In scripts: `djangocloud --no-input setup --own-cloud --region eu-west-1` with `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY` in the environment (the keys are never accepted as flags). The card step needs a browser.
+
+### Smooth, guided project creation
 
 Arrow-key menus, clear prices up front and no surprises. Nothing is created until you confirm.
 

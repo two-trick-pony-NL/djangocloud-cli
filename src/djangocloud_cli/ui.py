@@ -14,6 +14,10 @@ class NotInteractive(Exception):
     pass
 
 
+class CliError(Exception):
+    """Something the user can fix; the message is shown as is and the command exits 1."""
+
+
 NO_INPUT_ENV = "DJANGOCLOUD_NO_INPUT"
 _no_input = False
 
@@ -55,6 +59,12 @@ def text(message: str, default: str = "") -> str:
 def confirm(message: str, default: bool = True) -> bool:
     _need_terminal("confirmation")
     return ask(questionary.confirm(message, default=default))
+
+
+def password(message: str) -> str:
+    """Ask for a secret without echoing it."""
+    _need_terminal(message.lower())
+    return ask(questionary.password(message))
 
 
 def select(message: str, choices: list[tuple[str, object]]):
