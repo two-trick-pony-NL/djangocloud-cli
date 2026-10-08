@@ -46,12 +46,23 @@ def test_env_token_beats_the_file(monkeypatch):
 # ---------- link file ----------
 
 
-def test_link_file_is_written_with_a_gitignore_and_no_secrets(tmp_path):
+def test_link_file_is_written_without_a_gitignore_and_no_secrets(tmp_path):
     path = link.save(tmp_path, {"id": 7, "slug": "my-shop"}, "https://x/api/v1")
     assert json.loads(path.read_text()) == {"project_id": 7, "project": "my-shop", "api": "https://x/api/v1"}
-    assert (tmp_path / ".djangocloud" / ".gitignore").read_text() == "*\n"
+    assert not (tmp_path / ".djangocloud" / ".gitignore").exists()  # the link file is meant to be committed
     assert link.load(tmp_path)["slug"] == "my-shop"
     assert link.remove(tmp_path) and link.load(tmp_path) is None
+
+
+def test_saving_removes_the_gitignore_older_versions_wrote_but_not_one_you_made(tmp_path):
+    folder = tmp_path / ".djangocloud"
+    folder.mkdir()
+    (folder / ".gitignore").write_text("*\n")
+    link.save(tmp_path, {"id": 7, "slug": "my-shop"}, "https://x/api/v1")
+    assert not (folder / ".gitignore").exists()
+    (folder / ".gitignore").write_text("config.json\n")  # yours: leave it
+    link.save(tmp_path, {"id": 7, "slug": "my-shop"}, "https://x/api/v1")
+    assert (folder / ".gitignore").read_text() == "config.json\n"
 
 
 def test_find_root_prefers_a_linked_parent_then_manage_py(tmp_path):

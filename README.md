@@ -122,8 +122,10 @@ Arrow-key menus, clear prices up front and no surprises. Nothing is created unti
 
 ### Your folder remembers its project
 
-`.djangocloud/config.json` records which project a folder deploys to. It holds no secrets, and a `.gitignore` inside
-the folder keeps it out of your repository. After the first run there are no prompts.
+`.djangocloud/config.json` records which project a folder deploys to, plus your build settings. It holds no secrets, so
+**commit it**: a CI checkout then knows its project and `djangocloud --no-input deploy` needs no flags. After the first
+run there are no prompts. (Versions up to 0.1.12 hid the folder with a `.gitignore` inside it; the next run removes that
+file if it is the one the CLI wrote, and leaves any other alone.)
 
 ### What gets uploaded
 

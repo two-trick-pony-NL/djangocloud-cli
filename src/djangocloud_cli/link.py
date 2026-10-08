@@ -1,11 +1,14 @@
 """The link between a folder and a DjangoCloud project: `.djangocloud/config.json`.
 
-Written by the CLI, holds no secrets, and is git-ignored by a `.gitignore` inside the folder, so it
-can't be committed by accident. The API token lives in the user's config directory, not here.
+Written by the CLI and meant to be committed: it holds the project, the API address and the build settings, and no
+secrets, so a CI checkout (`djangocloud --no-input deploy`) knows which project it deploys to. The API token lives in
+the user's config directory, not here.
 """
 
 import json
 from pathlib import Path
+
+LEGACY_GITIGNORE = "*\n"  # what CLI versions up to 0.1.12 wrote into the folder
 
 DIR = ".djangocloud"
 FILE = "config.json"
@@ -60,7 +63,11 @@ def save_build(root: Path, build: dict) -> Path:
 def save(root: Path, project: dict, api: str) -> Path:
     folder = root / DIR
     folder.mkdir(exist_ok=True)
-    (folder / ".gitignore").write_text("*\n")
+    legacy = folder / ".gitignore"
+    if (
+        legacy.is_file() and legacy.read_text() == LEGACY_GITIGNORE
+    ):  # older versions hid the folder; ours, so ours to remove
+        legacy.unlink()
     path = folder / FILE
     data = {"project_id": project["id"], "project": project["slug"], "api": api}
     old = _read_raw(root)
