@@ -6,7 +6,7 @@ import re
 import subprocess
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 from . import __version__, auth, config, detect, link, onboarding, package
@@ -472,7 +472,7 @@ def ago(iso: str | None, now: datetime | None = None) -> str:
     if not iso:
         return "never"
     then = datetime.fromisoformat(iso)
-    seconds = max(0, int(((now or datetime.now(UTC)) - then).total_seconds()))
+    seconds = max(0, int(((now or datetime.now(timezone.utc)) - then).total_seconds()))
     for limit, unit, size in ((60, "s", 1), (3600, "min", 60), (86400, "h", 3600)):
         if seconds < limit:
             return "just now" if seconds < 5 and unit == "s" else f"{seconds // size} {unit} ago"

@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -74,7 +74,7 @@ def test_an_older_server_gets_a_clear_message_not_a_stack_trace(api, linked, cap
 
 
 def test_ago_reads_naturally():
-    now = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
+    now = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)
     assert cli.ago(None) == "never"
     assert cli.ago((now - timedelta(seconds=2)).isoformat(), now) == "just now"
     assert cli.ago((now - timedelta(seconds=40)).isoformat(), now) == "40 s ago"
