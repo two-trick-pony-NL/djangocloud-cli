@@ -253,7 +253,7 @@ def test_a_hosted_project_is_created_with_hosted_true_and_needs_no_aws_connectio
 def test_asking_for_hosting_without_the_plan_explains_how_to_get_it_and_creates_nothing(api, project_dir, capsys):
     api.can_host = False
     assert deploy(api, "--hosted") != 0
-    assert "Company or Enterprise" in capsys.readouterr().err
+    assert "Fully managed" in capsys.readouterr().err
     assert posted_projects(api) == []
 
 

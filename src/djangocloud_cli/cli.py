@@ -58,9 +58,7 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
         cmd.add_argument("--name", help="Create a new project with this name without prompting")
         cmd.add_argument("--size", help="Server size for a new project, e.g. nano")
         where = cmd.add_mutually_exclusive_group()
-        where.add_argument(
-            "--hosted", action="store_true", help="New project: we run it for you (Company/Enterprise plans)"
-        )
+        where.add_argument("--hosted", action="store_true", help="New project: we run it for you (Fully managed plan)")
         where.add_argument("--own-cloud", action="store_true", help="New project: it runs in your own AWS account")
         cmd.add_argument("-y", "--yes", action="store_true", help="Don't ask for confirmation")
     deploy_flags = sub.choices["deploy"]
@@ -173,9 +171,7 @@ def choose_where(client: Client, args) -> bool:
     can_host = client.get("/me").get("can_host", False)
     if args.hosted:
         if not can_host:
-            raise CliError(
-                f"Hosting needs the Company or Enterprise plan. Switch plans: {site_url()}/dashboard/billing/"
-            )
+            raise CliError(f"Hosting needs the Fully managed plan. Switch plans: {site_url()}/dashboard/billing/")
         return True
     if args.own_cloud or not can_host or args.yes or no_input():
         return False
