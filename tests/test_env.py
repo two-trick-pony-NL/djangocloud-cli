@@ -123,3 +123,43 @@ def test_list_shows_names_only(api, linked, capsys):
     assert cli.run(["env", "list"]) == 0
     out = capsys.readouterr().out
     assert "2 variable(s)" in out and "A" in out and "B" in out
+
+
+# ---------- rollback ----------
+
+
+def test_rollback_to_a_given_version_asks_for_nothing_and_follows_the_new_release(api, linked, capsys):
+    assert cli.run(["--no-input", "rollback", "1"]) == 0
+    assert api.rollback_requests == [{"version": 1}]
+    assert "v1 is live" in capsys.readouterr().out  # the fake release script ends live
+
+
+def test_rollback_says_what_it_does_and_does_not_reverse(api, linked, capsys):
+    cli.run(["--no-input", "rollback", "1", "--no-wait"])
+    out = capsys.readouterr().out
+    assert "v2 → v1" in out and "migrations are not reversed" in out and "Queued as v3" in out
+
+
+def test_rollback_without_a_version_cannot_ask_in_ci(api, linked, capsys):
+    assert cli.run(["--no-input", "rollback"]) == 1
+    assert api.rollback_requests == []
+
+
+def test_a_refused_rollback_shows_the_reason(api, linked, capsys):
+    api.rollback_error = (409, {"error": "rollback_refused", "message": "v2 is already the live release."})
+    assert cli.run(["--no-input", "rollback", "2"]) == 1
+    assert "already the live release" in capsys.readouterr().err
+
+
+# ---------- help ----------
+
+
+@pytest.mark.parametrize("argv", [["help"], []])
+def test_help_lists_every_command_with_all_of_its_options(argv, capsys):
+    assert cli.run(argv) == 0
+    out = capsys.readouterr().out
+    for expected in (
+        "rollback", "env push", "env list", "--from-env", "--prune", "--dry-run", "--instances", "--since",
+        "--follow", "--github", "--no-wait", "--own-cloud",
+    ):  # fmt: skip
+        assert expected in out, expected

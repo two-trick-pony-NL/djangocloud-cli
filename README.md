@@ -76,8 +76,10 @@ to see every command.
 | `status` | Is it live and answering? Shows the URL, size and latest releases; `--json` for scripts |
 | `env push` | Set environment variables from a `.env` file, or from named variables in CI (`--from-env`); `--prune` also removes the rest, `--dry-run` shows what would change |
 | `env list` | Show the names of a project's variables (never their values) |
+| `rollback` | Go back to an earlier release: `rollback 3`, or pick from a list. `-y` skips the question, `--no-wait` returns once queued |
 | `scale` | Change the server size and number of instances: `--size small --instances 3`; `-y` skips the question, `--no-wait` returns once queued |
 | `teardown` | Delete a project and what it created in AWS. You type its name to confirm (`--yes` for scripts) |
+| `help` | Every command with all of its options. `help <command>` for one |
 | `help [command]` | Help for everything, or for one command |
 
 ### Status and logs
@@ -156,6 +158,23 @@ then the source of truth, so edit it to change how your app is built:
 
 The server checks every setting and lists all problems at once. The full list with defaults is at
 `/api/v1/build-config`. If your WSGI app can't be detected in CI, pass `--wsgi-module config.wsgi:application`.
+
+### Rolling back
+
+```
+$ djangocloud rollback
+? Roll back to  v1    superseded  1 d ago    b3f9c1a
+my-shop: v2 → v1. Its image and variables come back as a new release; database migrations are not reversed.
+? Roll back? Yes
+  v3 is live
+✓ v3 is live.
+```
+
+A rollback redeploys the older release's image, with the environment variables it had then, as a **new** release, so the
+history stays a straight line. Nothing is rebuilt, so it is live in a minute or two. Give the number to skip the menu
+(`djangocloud rollback 1`); in CI that is required, together with `--no-input`. Releases that failed, or whose image
+has been cleaned up, can't be rolled back to, and the server says why. Database migrations are never reversed, so keep
+them backwards compatible.
 
 ### Environment variables
 

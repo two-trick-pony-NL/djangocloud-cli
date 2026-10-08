@@ -35,6 +35,8 @@ class FakeApi:
             },
         ]
         self.requests = []
+        self.rollback_requests = []
+        self.rollback_error = None  # (status, body) to answer POST /projects/<id>/rollback with
         self.env_existing = []  # names already on the project
         self.env_saved = []  # bodies of PUT /projects/<id>/env
         self.env_error = None  # (status, body) to answer PUT /projects/<id>/env with
@@ -241,6 +243,12 @@ class FakeApi:
                     else:
                         api.plan = "starter"
                     return self._reply(200, {})
+                if self.path.endswith("/rollback"):
+                    if api.rollback_error:
+                        return self._reply(*api.rollback_error)
+                    api.rollback_requests.append(body)
+                    return self._reply(202, {"id": 9, "version": 3, "status": "queued", "done": False, "ok": False,
+                                             "git_sha": "", "created_at": "2026-10-08T10:00:00+00:00"})  # fmt: skip
                 if self.path.endswith("/scale"):
                     api.scale_requests.append(body)
                     pending = {"status": "pending", "error": "", "power": "", "scale": 0}

@@ -94,6 +94,17 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
     scale.add_argument("-y", "--yes", action="store_true", help="Don't ask for confirmation")
     scale.add_argument("--no-wait", action="store_true", help="Return as soon as the change is queued")
 
+    rollback = sub.add_parser(
+        "rollback",
+        help="Go back to an earlier release (its image and variables are redeployed as a new release)",
+        description="Redeploy an earlier release's image, with the environment variables it had, as a NEW release. "
+        "Nothing is rebuilt. Database migrations are never reversed.",
+    )
+    rollback.add_argument("version", nargs="?", type=int, help="The release number to go back to (asked if left out)")
+    rollback.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
+    rollback.add_argument("-y", "--yes", action="store_true", help="Don't ask for confirmation")
+    rollback.add_argument("--no-wait", action="store_true", help="Return as soon as the rollback is queued")
+
     env = sub.add_parser("env", help="Manage a project's environment variables (push them from a file or from CI)")
     env_sub = env.add_subparsers(dest="env_command", metavar="<push|list>", required=True)
     push = env_sub.add_parser(
@@ -690,6 +701,41 @@ def cmd_teardown(args, root) -> int:
     return 0
 
 
+def cmd_rollback(args, root) -> int:
+    client = make_client()
+    ensure_login(client)
+    project = resolve_project(client, root, args)
+    detail = _project_detail(client, project)
+    live = (detail.get("live_release") or {}).get("version")
+    version = args.version
+    if version is None:
+        choices = [
+            (
+                f"v{r['version']:<4} {r['status']:<11} {ago(r.get('created_at')):<10} {(r.get('git_sha') or '')[:7]}",
+                r["version"],
+            )
+            for r in detail.get("releases", [])
+            if r["status"] in ("active", "superseded") and r["version"] != live
+        ]
+        if not choices:
+            raise CliError("There is no earlier release to go back to.")
+        version = select("Roll back to", choices)
+    console.print(
+        f"{detail['slug']}: v{live} → [bold]v{version}[/bold]. Its image and variables come back as a new release; "
+        "database migrations are not reversed."
+    )
+    if not (args.yes or no_input()) and not confirm("Roll back?"):
+        raise CliError("Cancelled. Nothing was changed.")
+    try:
+        release = client.post(f"/projects/{detail['id']}/rollback", {"version": version})
+    except ApiError as exc:
+        raise explain(exc) from None
+    if args.no_wait:
+        console.print(f"[green]✓[/green] Queued as v{release['version']}. Check progress with '{say('status')}'.")
+        return 0
+    return follow(client, release)
+
+
 PLATFORM_PREFIXES = ("DJANGOCLOUD_HOSTED_DB_",)  # set by DjangoCloud itself; --prune never removes them
 
 
@@ -765,6 +811,7 @@ def cmd_env(args, root) -> int:
 
 COMMANDS = {
     "env": cmd_env,
+    "rollback": cmd_rollback,
     "login": cmd_login,
     "setup": cmd_setup,
     "scale": cmd_scale,
@@ -779,6 +826,23 @@ COMMANDS = {
 }
 
 
+def full_help(parser: argparse.ArgumentParser) -> str:
+    """The overview plus every command's own help (flags included), nested commands like `env push` too."""
+    sections = [parser.format_help().rstrip()]
+
+    def walk(p: argparse.ArgumentParser) -> None:
+        group = next((a for a in p._actions if isinstance(a, argparse._SubParsersAction)), None)
+        for name, sub in group.choices.items() if group else ():
+            if name == "help":
+                continue
+            sections.append(sub.format_help().rstrip())
+            walk(sub)
+
+    walk(parser)
+    rule = "\n\n" + "-" * 72 + "\n\n"
+    return sections[0] + "\n\nEvery command and its options:" + rule + rule.join(sections[1:])
+
+
 def run(argv: list[str] | None = None, prog: str = STANDALONE) -> int:
     global _prog
     _prog = prog
@@ -790,7 +854,7 @@ def run(argv: list[str] | None = None, prog: str = STANDALONE) -> int:
         topic = getattr(args, "topic", None)
         if topic:
             return run([topic, "--help"], prog)  # argparse prints the sub-command's help, then exits
-        parser.print_help()
+        sys.stdout.write(full_help(parser) + "\n")
         return 0
     handler = COMMANDS.get(args.command)
     if handler is None:
