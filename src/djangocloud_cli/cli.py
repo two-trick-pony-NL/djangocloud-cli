@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
-from . import __version__, auth, config, detect, envfile, link, onboarding, package, testing
+from . import __version__, auth, config, detect, envfile, link, onboarding, package, scaffold, testing
 from .api import ADVICE, ApiError, Client
 from .ui import CliError, NotInteractive, confirm, console, err, interactive, no_input, select, set_no_input, text
 
@@ -42,6 +42,14 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
+    new = sub.add_parser(
+        "new",
+        help="Create a new Django project that is ready to deploy",
+        description=f"Create a folder with a stock Django {scaffold.DJANGO_LTS} (LTS) project, exactly what "
+        "'django-admin startproject' writes, except that the database settings use SQLite on your computer and the "
+        "Postgres database DjangoCloud creates for you once it runs there.",
+    )
+    new.add_argument("name", help="The project's name, e.g. my-shop (also the folder it is created in)")
     sub.add_parser("login", help="Sign in (approve a code in your browser)")
     setup = sub.add_parser("setup", help="Guided setup: account, card, hosted or your own AWS, AWS keys")
     setup_where = setup.add_mutually_exclusive_group()
@@ -322,6 +330,22 @@ def create_project(client: Client, root, args) -> dict:
         if exc.code == "payment_required":
             raise CliError(f"{exc.message}") from None
         raise
+
+
+def cmd_new(args, root) -> int:
+    try:
+        folder = scaffold.create(Path.cwd(), args.name)
+    except scaffold.ScaffoldError as exc:
+        raise CliError(str(exc)) from None
+    package = scaffold.package_name(args.name)
+    console.print(f"[green]✓[/green] Created [bold]{args.name}[/bold] (Django {scaffold.DJANGO_LTS} LTS) in {folder}")
+    console.print(f"  [dim]{package}/settings.py is the stock settings, except DATABASES.[/dim]\n")
+    console.print("Next:")
+    console.print(f"  cd {args.name}")
+    console.print("  python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt")
+    console.print("  python manage.py runserver        [dim]# see it locally[/dim]")
+    console.print(f"  {say('deploy')}                  [dim]# put it online[/dim]")
+    return 0
 
 
 def cmd_login(args, root) -> int:
@@ -1275,6 +1299,7 @@ def _db_snapshot(client: Client, args, project: dict, found: dict, path: str) ->
 
 
 COMMANDS = {
+    "new": cmd_new,
     "test": cmd_test,
     "tests": cmd_tests,
     "autoscale": cmd_autoscale,

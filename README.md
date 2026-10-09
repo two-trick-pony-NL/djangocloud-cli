@@ -48,6 +48,21 @@ Deploying my-shop
 Run `djangocloud` on its own for the menu of commands, `djangocloud help` for every command with all its options, and
 `djangocloud <command>` without a subcommand (for example `djangocloud db`) for that command's own menu.
 
+### Start a new project
+
+```bash
+djangocloud new my-shop
+cd my-shop
+djangocloud deploy
+```
+
+`new` takes only the name. It creates a stock Django project for the latest LTS release (5.2), exactly what
+`django-admin startproject` writes, so you don't need Django installed to run it. The one change is the `DATABASES`
+setting: a local SQLite file on your computer, and the Postgres database DjangoCloud creates for you as soon as the
+app runs there (DjangoCloud adds the `DJANGOCLOUD_HOSTED_DB_*` variables to the deployment when you select and connect
+a database). Everything else a deployed app needs, such as static files and allowed hosts, DjangoCloud adds when it
+builds the image. The project's folder name can use letters, digits, `-` and `_`.
+
 ### Two ways to run it
 
 **`djangocloud <command>`** works as soon as the package is installed. There is nothing to add to your project, and it
