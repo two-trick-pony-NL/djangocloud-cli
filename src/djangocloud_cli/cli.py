@@ -12,9 +12,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
-from . import __version__, auth, config, detect, envfile, link, onboarding, package, scaffold, testing
+from . import __version__, auth, config, detect, envfile, link, onboarding, package, scaffold, superuser, testing
 from .api import ADVICE, ApiError, Client
-from .ui import CliError, NotInteractive, confirm, console, err, interactive, no_input, select, set_no_input, text
+from .ui import (
+    CliError,
+    NotInteractive,
+    confirm,
+    console,
+    err,
+    interactive,
+    no_input,
+    password,
+    select,
+    set_no_input,
+    text,
+)
 
 STANDALONE = "djangocloud"
 MANAGE_PY = "python manage.py djangocloud"
@@ -151,7 +163,7 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
 
     env = sub.add_parser("env", help="Manage a project's environment variables (push them from a file or from CI)")
     env.set_defaults(_menu=env)  # no subcommand: show this menu
-    env_sub = env.add_subparsers(dest="env_command", metavar="<push|list>")
+    env_sub = env.add_subparsers(dest="env_command", metavar="<push|list|remove>")
     push = env_sub.add_parser(
         "push",
         help="Set variables from a .env file, or from named variables in the environment (--from-env)",
@@ -169,6 +181,9 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
     push.add_argument("--prune", action="store_true", help="Also remove the project's variables that you did not send")
     push.add_argument("--dry-run", action="store_true", help="Show what would change, without changing anything")
     push.add_argument("-y", "--yes", action="store_true", help="Don't ask for confirmation when removing")
+    env_remove = env_sub.add_parser("remove", help="Remove variables by name")
+    env_remove.add_argument("names", nargs="+", metavar="NAME", help="The variables to remove")
+    env_remove.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
     env_list = env_sub.add_parser("list", help="List the names of a project's variables (never their values)")
     env_list.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
 
@@ -226,6 +241,15 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
     db_snapshot.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
     db_snapshot.add_argument("--no-wait", action="store_true", help="Return as soon as the snapshot is queued")
 
+    admin = sub.add_parser(
+        "superuser",
+        help="Set the admin user to create on the next deploy",
+        description="Ask for the fields your user model needs (default or custom, detected from your project), store "
+        "them as encrypted environment variables and switch on 'create_superuser'. The user is created when the next "
+        "release starts, and the password is removed from your variables once that deploy is live.",
+    )
+    admin.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
+    admin.add_argument("--no-deploy", action="store_true", help="Don't offer to deploy right away")
     teardown = sub.add_parser("teardown", help="Delete a project and everything it created in AWS")
     teardown.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
     teardown.add_argument("-y", "--yes", action="store_true", help="Don't ask you to type the project name")
@@ -394,6 +418,85 @@ def cmd_new(args, root) -> int:
     console.print("  python manage.py runserver        [dim]# see it locally[/dim]")
     console.print(f"  {say('deploy')}                  [dim]# put it online[/dim]")
     return 0
+
+
+def finish_superuser(client: Client, project: dict, root, build: dict) -> None:
+    """After a live deploy that created the admin user: take the password out of the project's variables and switch
+    `create_superuser` off, so nothing keeps running and the password isn't kept. Never fails the deploy."""
+    try:
+        client.delete(_env_path(project), {"names": [superuser.PASSWORD_VAR]})
+    except ApiError as exc:
+        err.print(
+            f"[yellow]! Couldn't remove {superuser.PASSWORD_VAR} ({exc.message}). "
+            f"Remove it yourself: {say('env remove ' + superuser.PASSWORD_VAR)}[/yellow]"
+        )
+        return
+    link.save_build(root, {**build, "create_superuser": False})
+    console.print(
+        "[green]✓[/green] The admin user was created on this deploy. Removed its password from your variables and "
+        "switched 'create_superuser' off. Can't log in? The release log above says why."
+    )
+
+
+def cmd_superuser(args, root) -> int:
+    client = make_client()
+    ensure_login(client)
+    project = resolve_project(client, root, args)
+    build = link.load_build(root)
+    if build is None:
+        raise CliError(f"No build settings yet. Run '{say('deploy')}' once first.")
+    model = superuser.discover(root, build.get("django_settings_module", ""))
+    if model.unsupported:
+        names = ", ".join(f["name"] for f in model.unsupported)
+        raise CliError(
+            f"Your user model ({model.label}) needs {names}, which can't be given through an environment variable "
+            "(it is a relation). Create the admin user by hand instead, with 'python manage.py createsuperuser'."
+        )
+    console.print(
+        f"User model: [bold]{model.label}[/bold]  [dim](needs {', '.join(f['name'] for f in model.fields)})[/dim]"
+    )
+    if model.guessed:
+        console.print(
+            "[yellow]! Couldn't load your project here (is its environment installed?), so Django's default fields "
+            "are assumed. Check the model above.[/yellow]"
+        )
+    values: dict[str, str] = {}
+    for item in model.fields:
+        values[variable_name_for(item)] = text(f"Admin {item['label']}").strip()
+        if not values[variable_name_for(item)]:
+            raise CliError(f"{item['label']} can't be empty.")
+    secret = ask_new_password()
+    variables = {**values, superuser.PASSWORD_VAR: secret}
+    try:
+        client.put(_env_path(project), {"variables": variables, "replace": False})
+    except ApiError as exc:
+        raise explain(exc) from None
+    link.save_build(root, {**build, "create_superuser": True})
+    console.print(
+        f"[green]✓[/green] Saved. The admin user is created on your next deploy; its password is removed from "
+        f"your variables afterwards.\n  [dim]Deploying from GitHub? Commit {link.DIR}/{link.FILE} first (it now has "
+        f'"create_superuser": true), and remove the password yourself afterwards with '
+        f"'{say('env remove ' + superuser.PASSWORD_VAR)}'.[/dim]"
+    )
+    if not args.no_deploy and confirm("Deploy now?", default=True):
+        return run(["deploy", *(["--project", args.project] if args.project else [])], _prog)
+    return 0
+
+
+def variable_name_for(item: dict) -> str:
+    return superuser.variable_name(item["name"])
+
+
+def ask_new_password() -> str:
+    for _ in range(3):
+        first = password("Admin password")
+        if not first:
+            console.print("[red]The password can't be empty.[/red]")
+            continue
+        if first == password("Repeat the password"):
+            return first
+        console.print("[red]The two passwords differ. Try again.[/red]")
+    raise CliError("The passwords didn't match.")
 
 
 def cmd_login(args, root) -> int:
@@ -755,6 +858,7 @@ def cmd_deploy(args, root) -> int:
     console.print(f"Deploying [bold]{project['slug']}[/bold]")
     preflight(client, project["slug"])
     fields = {"git_sha": git_sha(root)}
+    build: dict = {}
     if args.github:
         console.print("Deploying the latest commit from the linked GitHub repository.")
         data = None
@@ -784,7 +888,10 @@ def cmd_deploy(args, root) -> int:
             raise CliError(exc.message) from None
         raise explain(exc) from None
     console.print(f"[green]✓[/green] Uploaded. Release v{release['version']} started.")
-    return follow(client, release)
+    code = follow(client, release)
+    if code == 0 and build.get("create_superuser"):
+        finish_superuser(client, project, root, build)
+    return code
 
 
 # ---------- status and logs ----------
@@ -1095,6 +1202,18 @@ def cmd_env(args, root) -> int:
         for name in names:
             console.print(f"  {name}")
         return 0
+    if args.env_command == "remove":
+        try:
+            result = client.delete(_env_path(project), {"names": args.names})
+        except ApiError as exc:
+            raise explain(exc) from None
+        gone = result.get("removed", [])
+        console.print(
+            f"[green]✓[/green] Removed {', '.join(gone)}. It applies from the next deploy."
+            if gone
+            else "None of those variables exist on the project."
+        )
+        return 0
     variables = _collect_env(args)
     if not variables and not args.prune:
         raise CliError("There is nothing to send: no variables were found.")
@@ -1347,6 +1466,7 @@ def _db_snapshot(client: Client, args, project: dict, found: dict, path: str) ->
 
 
 COMMANDS = {
+    "superuser": cmd_superuser,
     "new": cmd_new,
     "test": cmd_test,
     "tests": cmd_tests,

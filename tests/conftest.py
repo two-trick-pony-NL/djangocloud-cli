@@ -35,6 +35,7 @@ class FakeApi:
             },
         ]
         self.requests = []
+        self.env_removed = []
         self.tests_policy = {"require": False, "last": None}
         self.rollback_requests = []
         self.rollback_error = None  # (status, body) to answer POST /projects/<id>/rollback with
@@ -298,6 +299,9 @@ class FakeApi:
                 api.requests.append(("DELETE", self.path, body))
                 if not self._authed():
                     return
+                if self.path.endswith("/env"):
+                    api.env_removed.append(body)
+                    return self._reply(200, {"created": [], "updated": [], "removed": body.get("names", [])})
                 if self.path.startswith("/api/v1/projects/"):
                     if body.get("confirm") != api.detail["slug"]:
                         return self._reply(400, {"error": "confirmation_required", "message": "Send the slug."})

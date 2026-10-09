@@ -279,6 +279,23 @@ pip install -U djangocloud-cli
 uv tool upgrade djangocloud-cli     # if you installed it with uv
 ```
 
+### Create an admin user
+
+```bash
+djangocloud superuser
+```
+
+A new deployment has an empty database, so nobody can sign in to the Django admin yet. `superuser` asks your *project*
+which fields its user model needs, so a custom model (email as the username, extra required fields) works as well as the
+default one, then asks for them and a password. They are stored as encrypted environment variables
+(`DJANGO_SUPERUSER_<FIELD>`, the names Django's `createsuperuser --noinput` reads), and `create_superuser` is switched on
+in `.djangocloud/config.json`. On the next deploy the release runs your migrations and then creates the user. Once that
+deploy is live the CLI removes the password variable and switches the setting off again, so the password isn't kept.
+
+An existing user is left alone, a failure never stops your app from starting, and a user model that requires a
+relation field is explained instead of guessed at. Deploying from GitHub? Commit `.djangocloud/config.json` first.
+`djangocloud env remove NAME [NAME ...]` removes variables by name.
+
 ### Rolling back
 
 ```
