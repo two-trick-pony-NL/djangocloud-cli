@@ -154,9 +154,8 @@ def test_a_refused_rollback_shows_the_reason(api, linked, capsys):
 # ---------- help ----------
 
 
-@pytest.mark.parametrize("argv", [["help"], []])
-def test_help_lists_every_command_with_all_of_its_options(argv, capsys):
-    assert cli.run(argv) == 0
+def test_help_lists_every_command_with_all_of_its_options(capsys):
+    assert cli.run(["help"]) == 0  # bare `djangocloud` prints only the short menu; see test_cli
     out = capsys.readouterr().out
     for expected in (
         "rollback", "env push", "env list", "--from-env", "--prune", "--dry-run", "--instances", "--since",

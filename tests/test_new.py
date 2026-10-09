@@ -46,6 +46,9 @@ MANAGE = "os.environ.setdefault('DJANGO_SETTINGS_MODULE', '{name}.settings')\n"
 WSGI = "application = get_wsgi_application()\n"
 
 
+REAL_LATEST_LTS = scaffold.latest_lts  # the autouse fixture below fakes it for the CLI; these tests need the real one
+
+
 @pytest.fixture(autouse=True)
 def fake_django(tmp_path, monkeypatch):
     """No network and no real Django: PyPI is faked, and `django-admin startproject` writes a stock-looking project."""
@@ -178,18 +181,18 @@ def release(*versions):
 
 
 def test_the_latest_lts_is_the_highest_x_dot_2_series():
-    assert scaffold.latest_lts(release("4.2.9", "5.0.1", "5.1.4", "5.2.0", "5.2.7", "5.3.0")) == "5.2"
-    assert scaffold.latest_lts(release("5.2.7", "6.2.1", "6.0.3", "6.1.0")) == "6.2"
+    assert REAL_LATEST_LTS(release("4.2.9", "5.0.1", "5.1.4", "5.2.0", "5.2.7", "5.3.0")) == "5.2"
+    assert REAL_LATEST_LTS(release("5.2.7", "6.2.1", "6.0.3", "6.1.0")) == "6.2"
 
 
 def test_prereleases_and_yanked_releases_do_not_count():
     releases = {**release("5.2.7", "6.2rc1", "6.2b1"), "6.2.0": [{"yanked": True}], "7.2.0": []}
-    assert scaffold.latest_lts(releases) == "5.2"
+    assert REAL_LATEST_LTS(releases) == "5.2"
 
 
 def test_no_lts_at_all_is_an_error():
     with pytest.raises(scaffold.ScaffoldError):
-        scaffold.latest_lts(release("5.1.0"))
+        REAL_LATEST_LTS(release("5.1.0"))
 
 
 def test_the_requirement_follows_the_series():
@@ -214,7 +217,7 @@ def test_an_empty_existing_folder_is_fine(tmp_path):
     assert (tmp_path / "shop" / "manage.py").is_file()
 
 
-@pytest.mark.parametrize("name", ["test", "django", "os", "1shop", "my shop", "shöp", "class", "a/b", ".."])
+@pytest.mark.parametrize("name", ["test", "django", "os", "json", "1shop", "my shop", "shöp", "class", "a/b", ".."])
 def test_names_that_cannot_be_a_python_package_are_refused_clearly(name, capsys, tmp_path, fake_django):
     assert cli.run(["new", name]) == 1
     assert capsys.readouterr().err.startswith("Error:") and fake_django == [] and not list(tmp_path.iterdir())

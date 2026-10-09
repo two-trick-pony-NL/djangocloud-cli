@@ -37,6 +37,11 @@ PYPI_DJANGO = "https://pypi.org/pypi/django/json"
 LTS_RELEASE = re.compile(r"^(\d+)\.2\.(\d+)$")  # 4.2.x, 5.2.x ...: every X.2 series is a long-term-support release
 
 
+# Django refuses a project name that is also an importable module; these are the ones it would always trip over (the
+# stdlib names are checked separately, and `test` is a package Django's own test runner imports).
+RESERVED_NAMES = {"django", "test", "tests"}
+
+
 class ScaffoldError(Exception):
     """The message is safe to show the person who asked."""
 
@@ -54,7 +59,7 @@ def package_name(name: str) -> str:
         raise ScaffoldError("Use letters, digits, '-' and '_' only, for example: djangocloud new my-shop")
     if not package.isidentifier():
         raise ScaffoldError(f"{name!r} can't be a Python package name (it must not start with a digit).")
-    if keyword.iskeyword(package) or package in sys.stdlib_module_names or package == "django":
+    if keyword.iskeyword(package) or package in sys.stdlib_module_names or package in RESERVED_NAMES:
         raise ScaffoldError(f"{name!r} clashes with a Python or Django module name. Pick another one.")
     return package
 
