@@ -160,6 +160,45 @@ then the source of truth, so edit it to change how your app is built:
 The server checks every setting and lists all problems at once. The full list with defaults is at
 `/api/v1/build-config`. If your WSGI app can't be detected in CI, pass `--wsgi-module config.wsgi:application`.
 
+### Autoscaling and usage alerts
+
+```bash
+djangocloud autoscale on --min 2 --max 6     # add and remove instances by load (off keeps the range)
+djangocloud autoscale                        # show it
+djangocloud alerts on --cpu 80 --memory 85 --downtime
+djangocloud alerts off
+```
+
+Autoscaling is deliberately slow and careful: one instance at a time, out when CPU averages over 70% for 5 minutes
+(or memory over 85%), in only after 30 quiet minutes, never outside your range. A scaling change that fails turns it
+off and says why. Alerts email you when the 10-minute average of CPU or memory stays over your limits (and, with
+`--downtime`, when the server stops answering), at most every 6 hours while it lasts.
+
+### Server load
+
+```
+$ djangocloud metrics --since 6h
+my-shop  Nano × 2
+  CPU    ▁▁▂▂▃▃▅▇█▆▄▃▂▂▁▁▂▃▃▂  now 18%  peak 71%  avg 24%
+  Memory ▃▃▃▃▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  now 41%  peak 44%  avg 40%
+```
+
+CPU and memory as a percentage of the server size, from the same samples as the dashboard (every 5 minutes, kept for
+30 days). `--json` prints the raw samples for scripts.
+
+### Your database
+
+For a managed database DjangoCloud runs for you:
+
+```bash
+djangocloud db status       # state, size, public access, endpoint, last snapshot
+djangocloud db public on    # open it to the internet for ONE hour, then it locks again by itself
+djangocloud db public off   # lock it now (this cuts off your app too, so it asks first)
+djangocloud db snapshot     # take a snapshot and wait until it is ready
+```
+
+Public access never stays open, snapshots are kept until you delete them, and the CLI never shows credentials.
+
 ### Tests before every deploy
 
 The first interactive deploy looks at your project and, if it finds tests, offers to run them before each deploy. It
@@ -186,6 +225,18 @@ there, so you are asked once. Scripts and CI (`--yes`, no terminal) are never as
 before anything is uploaded; the result (passed, skipped, how long) is recorded on the release and shows in the
 dashboard. It is reported by the CLI, so "require passing tests" guards against mistakes, not against someone who
 sends the flag without running anything.
+
+### Keeping the CLI up to date
+
+Every answer from DjangoCloud tells the CLI whether it is current. After a command you may see a **notice** from us
+(for example about a change that is coming), a hint that a **newer version** exists, or, when your version is older
+than the minimum the service supports, **Upgrade needed**: the command stops before changing anything and says how to
+upgrade:
+
+```bash
+pip install -U djangocloud-cli
+uv tool upgrade djangocloud-cli     # if you installed it with uv
+```
 
 ### Rolling back
 
