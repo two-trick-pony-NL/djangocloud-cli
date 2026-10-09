@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from . import __version__, auth, config, detect, envfile, link, onboarding, package
-from .api import ApiError, Client
+from .api import ADVICE, ApiError, Client
 from .ui import CliError, NotInteractive, confirm, console, err, interactive, no_input, select, set_no_input, text
 
 STANDALONE = "djangocloud"
@@ -126,6 +126,59 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
     push.add_argument("-y", "--yes", action="store_true", help="Don't ask for confirmation when removing")
     env_list = env_sub.add_parser("list", help="List the names of a project's variables (never their values)")
     env_list.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
+
+    autoscale = sub.add_parser(
+        "autoscale",
+        help="Show or change autoscaling (add and remove instances by load)",
+        description="Show autoscaling, or turn it on (with a minimum and maximum number of instances) or off.",
+    )
+    autoscale.add_argument("state", nargs="?", choices=["on", "off"], help="Turn it on or off (omit to show it)")
+    autoscale.add_argument("--min", type=int, dest="low", help="Fewest instances to keep (1-20)")
+    autoscale.add_argument("--max", type=int, dest="high", help="Most instances to run (1-20)")
+    autoscale.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
+
+    alerts = sub.add_parser(
+        "alerts",
+        help="Show or change the emails sent when CPU or memory run high, or the server stops answering",
+        description="Show usage alerts, or turn them on (with CPU and memory limits in percent) or off.",
+    )
+    alerts.add_argument("state", nargs="?", choices=["on", "off"], help="Turn them on or off (omit to show them)")
+    alerts.add_argument("--cpu", type=int, help="Email when CPU stays above this percent (1-100)")
+    alerts.add_argument("--memory", type=int, help="Email when memory stays above this percent (1-100)")
+    alerts.add_argument(
+        "--downtime",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Also email when the server stops answering",
+    )
+    alerts.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
+
+    metrics = sub.add_parser("metrics", help="Show the server's CPU and memory load")
+    metrics.add_argument("--since", default="1h", metavar="DURATION", help="How far back: 30m, 6h or 7d (default 1h)")
+    metrics.add_argument("--json", action="store_true", help="Print the raw samples as JSON, for scripts")
+    metrics.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
+
+    db = sub.add_parser("db", help="The project's database: status, public access, snapshots")
+    db_sub = db.add_subparsers(dest="db_command", metavar="<status|public|snapshot>", required=True)
+    db_status = db_sub.add_parser("status", help="Show the database: state, size, public access, last snapshot")
+    db_status.add_argument("--json", action="store_true", help="Print the raw details as JSON, for scripts")
+    db_status.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
+    db_public = db_sub.add_parser(
+        "public",
+        help="Open the database to the internet for an hour, or lock it",
+        description="Open the database's public endpoint for one hour (it locks again by itself), or lock it now. "
+        "Locking also cuts off your app until you open it again.",
+    )
+    db_public.add_argument("state", nargs="?", choices=["on", "off"], help="on or off (omit to show the current state)")
+    db_public.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
+    db_public.add_argument("-y", "--yes", action="store_true", help="Don't ask for confirmation")
+    db_snapshot = db_sub.add_parser(
+        "snapshot",
+        help="Take a snapshot of the database now",
+        description="Take a manual snapshot. Unlike the automatic backups (a week), it is kept until you delete it.",
+    )
+    db_snapshot.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
+    db_snapshot.add_argument("--no-wait", action="store_true", help="Return as soon as the snapshot is queued")
 
     teardown = sub.add_parser("teardown", help="Delete a project and everything it created in AWS")
     teardown.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
@@ -809,7 +862,229 @@ def cmd_env(args, root) -> int:
     return 0
 
 
+def _onoff(value: bool) -> str:
+    return "[green]on[/green]" if value else "[dim]off[/dim]"
+
+
+def _put(client: Client, path: str, body: dict) -> dict:
+    try:
+        return client.put(path, body)
+    except ApiError as exc:
+        raise explain(exc) from None
+
+
+def cmd_autoscale(args, root) -> int:
+    client = make_client()
+    ensure_login(client)
+    project = resolve_project(client, root, args)
+    path = f"/projects/{project['id']}/autoscale"
+    if args.state is None and args.low is None and args.high is None:
+        found = get_or_explain(client, path)
+        line = f"{project['slug']}: autoscaling is {_onoff(found['enabled'])}"
+        console.print(line + (f", {found['min']} to {found['max']} instances." if found["enabled"] else "."))
+        if found["enabled"] and found["note"]:
+            console.print(f"  [dim]{found['note']}[/dim]")
+        return 0
+    body = {"enabled": args.state != "off"}
+    if args.state is None:  # --min/--max alone changes the range, whatever state it is in
+        body["enabled"] = get_or_explain(client, path)["enabled"]
+    if args.low is not None:
+        body["min"] = args.low
+    if args.high is not None:
+        body["max"] = args.high
+    if body["enabled"] and args.state == "on" and (args.low is None or args.high is None):
+        raise CliError("Turning autoscaling on needs --min and --max, e.g. --min 2 --max 6.")
+    saved = _put(client, path, body)
+    if saved["enabled"]:
+        console.print(f"[green]✓[/green] Autoscaling is on: {saved['min']} to {saved['max']} instances.")
+    else:
+        console.print("[green]✓[/green] Autoscaling is off.")
+    return 0
+
+
+def cmd_alerts(args, root) -> int:
+    client = make_client()
+    ensure_login(client)
+    project = resolve_project(client, root, args)
+    path = f"/projects/{project['id']}/alerts"
+    if args.state is None and args.cpu is None and args.memory is None and args.downtime is None:
+        found = get_or_explain(client, path)
+        console.print(f"{project['slug']}: usage alerts are {_onoff(found['enabled'])}")
+        console.print(f"  CPU above      {found['cpu']}%\n  Memory above   {found['memory']}%")
+        console.print(f"  Server down    {_onoff(found['downtime'])}")
+        if found["firing"]:
+            console.print("  [red]Over a limit right now.[/red]")
+        return 0
+    body = {k: v for k, v in (("cpu", args.cpu), ("memory", args.memory), ("downtime", args.downtime)) if v is not None}
+    if args.state:
+        body["enabled"] = args.state == "on"
+    saved = _put(client, path, body)
+    if saved["enabled"]:
+        console.print(
+            f"[green]✓[/green] We'll email you when CPU stays above {saved['cpu']}% or memory above {saved['memory']}%"
+            + (", or the server stops answering." if saved["downtime"] else ".")
+        )
+    else:
+        console.print("[green]✓[/green] Usage alerts are off.")
+    return 0
+
+
+BARS = "▁▂▃▄▅▆▇█"
+
+
+def sparkline(values: list[float], width: int = 48) -> str:
+    """Percent values (0-100) as a line of block characters, thinned to `width`."""
+    if len(values) > width:
+        step = len(values) / width
+        values = [max(values[int(i * step) : max(int((i + 1) * step), int(i * step) + 1)]) for i in range(width)]
+    return "".join(BARS[min(len(BARS) - 1, int(max(0.0, v) / 100 * len(BARS)))] for v in values)
+
+
+def cmd_metrics(args, root) -> int:
+    client = make_client()
+    ensure_login(client)
+    project = resolve_project(client, root, args)
+    try:
+        found = get_or_explain(client, f"/projects/{project['id']}/metrics?" + urlencode({"since": args.since}))
+    except ApiError as exc:
+        raise explain(exc) from None
+    if args.json:
+        console.print_json(json.dumps(found))
+        return 0
+    points, latest = found["points"], found["latest"]
+    console.print(f"[bold]{project['slug']}[/bold]  {found['power'].capitalize()} × {found['scale']}")  # noqa: RUF001
+    if not points:
+        console.print(
+            f"  No samples in the last {args.since}." + (f" Latest was {ago(latest['at'])}." if latest else "")
+        )
+        return 0
+    for label, key in (("CPU", "cpu"), ("Memory", "memory")):
+        values = [p[key] for p in points]
+        now, peak = values[-1], max(values)
+        console.print(
+            f"  {label:<7}{sparkline(values)}  now {now:.0f}%  peak {peak:.0f}%  avg {sum(values) / len(values):.0f}%"
+        )
+    console.print(f"  [dim]{len(points)} samples over the last {args.since}, newest {ago(points[-1]['at'])}[/dim]")
+    return 0
+
+
+def _database(client: Client, project: dict) -> dict:
+    try:
+        return get_or_explain(client, f"/projects/{project['id']}/database")
+    except ApiError as exc:
+        raise explain(exc) from None
+
+
+def cmd_db(args, root) -> int:
+    client = make_client()
+    ensure_login(client)
+    project = resolve_project(client, root, args)
+    path = f"/projects/{project['id']}/database"
+    found = _database(client, project)
+    if args.db_command == "status":
+        return _db_status(args, project, found)
+    if args.db_command == "public":
+        return _db_public(client, args, project, found, path)
+    return _db_snapshot(client, args, project, found, path)
+
+
+def _db_public_text(found: dict) -> str:
+    if found.get("network_pending"):
+        return f"{found['network_pending']}…"
+    if found.get("public") is None:
+        return "unknown"
+    until = f" (locks again {found['open_until'][11:16]} UTC)" if found.get("open_until") else ""
+    return ("[yellow]open to the internet[/yellow]" + until) if found["public"] else "[green]locked[/green]"
+
+
+def _db_status(args, project: dict, found: dict) -> int:
+    if args.json:
+        console.print_json(json.dumps(found))
+        return 0
+    console.print(
+        f"[bold]{project['slug']}[/bold] database  {found['size'].capitalize()}"
+        + (" · high availability" if found["ha"] else "")
+    )
+    if found.get("removing"):
+        console.print("  [yellow]Being removed.[/yellow]")
+        return 0
+    if not found["ready"]:
+        console.print("  Still being created.")
+        return 0
+    console.print(f"  State      {found.get('state', 'unknown')}")
+    console.print(f"  Public     {_db_public_text(found)}")
+    if found.get("endpoint"):
+        console.print(f"  Endpoint   {found['endpoint']}")
+    snapshot = found.get("last_snapshot")
+    if snapshot:
+        console.print(
+            f"  Snapshot   {snapshot['name']} ({ago(snapshot['created_at'])})"
+            + ("  [dim]taking another…[/dim]" if found.get("snapshot_pending") else "")
+        )
+    elif found.get("snapshot_pending"):
+        console.print("  Snapshot   being taken…")
+    if found.get("latest_restorable"):
+        console.print(f"  Restorable up to {ago(found['latest_restorable'])} (automatic backups, a week)")
+    if found.get("aws_error"):
+        console.print(f"  [yellow]AWS couldn't be reached: {found['aws_error']}[/yellow]")
+    return 0
+
+
+def _db_public(client: Client, args, project: dict, found: dict, path: str) -> int:
+    if args.state is None:
+        console.print(f"{project['slug']}: database is {_db_public_text(found)}")
+        return 0
+    want = args.state == "on"
+    if want:
+        console.print(
+            "The database will accept connections from anywhere on the internet for one hour, then lock again."
+        )
+    else:
+        console.print(
+            "[yellow]Locking cuts off every connection, including your app, until you open it again.[/yellow]"
+        )
+    if not (args.yes or no_input()) and not confirm("Continue?", default=False):
+        raise CliError("Cancelled. Nothing was changed.")
+    try:
+        client.post(f"{path}/network", {"public": want})
+    except ApiError as exc:
+        raise explain(exc) from None
+    console.print("[green]✓[/green] " + ("Opening the database for an hour." if want else "Locking the database."))
+    console.print(f"  Follow it with '{say('db status')}'.")
+    return 0
+
+
+def _db_snapshot(client: Client, args, project: dict, found: dict, path: str) -> int:
+    try:
+        client.post(f"{path}/snapshot")
+    except ApiError as exc:
+        raise explain(exc) from None
+    if args.no_wait:
+        console.print("[green]✓[/green] Snapshot queued. Check it with " + f"'{say('db status')}'.")
+        return 0
+    try:
+        with console.status("Taking the snapshot…"):
+            deadline = time.monotonic() + 1800
+            while time.monotonic() < deadline:
+                _sleep(5)
+                state = _database(client, project)
+                if not state.get("snapshot_pending"):
+                    break
+            else:
+                raise CliError(f"Still taking the snapshot. Check it with '{say('db status')}'.")
+    except KeyboardInterrupt:
+        console.print(f"\nStill running in the background. Check it with '{say('db status')}'.")
+        return 0
+    snapshot = state.get("last_snapshot")
+    console.print("[green]✓[/green] Snapshot " + (f"{snapshot['name']} is ready." if snapshot else "finished."))
+    return 0
+
+
 COMMANDS = {
+    "autoscale": cmd_autoscale,
+    "alerts": cmd_alerts,
+    "metrics": cmd_metrics,
+    "db": cmd_db,
     "env": cmd_env,
     "rollback": cmd_rollback,
     "login": cmd_login,
@@ -860,16 +1135,34 @@ def run(argv: list[str] | None = None, prog: str = STANDALONE) -> int:
     if handler is None:
         err.print(COMING_SOON.format(command=say(args.command)))
         return 2
+    ADVICE.clear()
     try:
         return handler(args, link.find_root())
     except (CliError, NotInteractive) as exc:
         err.print(f"[red]Error:[/red] {exc}")
     except ApiError as exc:
-        err.print(f"[red]Error:[/red] {exc.message}")
+        if exc.code == "upgrade_required":  # this version is no longer supported: say how to upgrade, nothing else
+            err.print(f"[red]Upgrade needed:[/red] {exc.message}")
+        else:
+            err.print(f"[red]Error:[/red] {exc.message}")
     except KeyboardInterrupt:
         err.print("\nCancelled.")
         return 130
+    finally:
+        show_advice()
     return 1
+
+
+def show_advice() -> None:
+    """After a command: what the server said about this version (a notice from us, or a newer release)."""
+    command = ADVICE.get("upgrade_command") or "pip install -U djangocloud-cli"
+    if ADVICE.get("notice"):
+        err.print(f"\n[yellow]Notice:[/yellow] {ADVICE['notice']}")
+    if ADVICE.get("latest"):
+        err.print(
+            f"[yellow]A newer djangocloud-cli is available[/yellow] ({ADVICE['latest']}; you have {__version__}). "
+            f"Upgrade: {command}"
+        )
 
 
 def main() -> None:

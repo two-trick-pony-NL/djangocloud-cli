@@ -4,10 +4,29 @@ import json
 import urllib.error
 import urllib.request
 import uuid
+from urllib.parse import unquote
 
 from . import __version__
 
 TIMEOUT = 30
+
+# What the server said about our version, collected from the headers of every answer (no extra request): shown once,
+# after the command, by cli.run. Keys: latest, notice, upgrade_command.
+ADVICE: dict[str, str] = {}
+_HEADERS = {
+    "X-DjangoCloud-Latest-Version": "latest",
+    "X-DjangoCloud-Notice": "notice",
+    "X-DjangoCloud-Upgrade-Command": "upgrade_command",
+}
+
+
+def _remember_advice(headers) -> None:
+    for header, key in _HEADERS.items():
+        value = headers.get(header)
+        if value:
+            ADVICE[key] = unquote(value) if key == "notice" else value
+
+
 UPLOAD_TIMEOUT = 300
 
 
@@ -45,8 +64,10 @@ class Client:
             with urllib.request.urlopen(  # noqa: S310 - scheme checked in __init__
                 req, timeout=UPLOAD_TIMEOUT if raw else TIMEOUT
             ) as response:
+                _remember_advice(response.headers)
                 return json.loads(response.read() or b"{}")
         except urllib.error.HTTPError as exc:
+            _remember_advice(exc.headers)
             try:
                 payload = json.loads(exc.read())
             except ValueError:
