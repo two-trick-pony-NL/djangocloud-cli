@@ -69,6 +69,8 @@ it (Django is installed just for that, away from your environment, so it needs a
 - **An empty `.env`** (kept out of git, never uploaded with your code) with a comment on how to use it: add `KEY=value`
   lines and send them with `djangocloud env push .env`.
 
+It then creates a `.venv` in the project and installs Django and the other requirements into it (with uv when you have it, pip otherwise; `--no-install` skips that), so `python manage.py runserver` works straight away.
+
 It also writes a short `README.md` for the project: how to run it locally, deploy it, send environment variables and
 connect a database.
 

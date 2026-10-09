@@ -50,6 +50,11 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
         "DjangoCloud creates for you once it runs there. Needs a network connection.",
     )
     new.add_argument("name", help="The project's name, e.g. my-shop (also the folder it is created in)")
+    new.add_argument(
+        "--no-install",
+        action="store_true",
+        help="Don't create the .venv and install Django (and the other requirements) into it",
+    )
     sub.add_parser("login", help="Sign in (approve a code in your browser)")
     setup = sub.add_parser("setup", help="Guided setup: account, card, hosted or your own AWS, AWS keys")
     setup_where = setup.add_mutually_exclusive_group()
@@ -348,10 +353,25 @@ def cmd_new(args, root) -> int:
     except scaffold.ScaffoldError as exc:
         raise CliError(str(exc)) from None
     console.print(f"[green]✓[/green] Created [bold]{args.name}[/bold] (Django {series} LTS) in {folder}")
-    console.print(f"  [dim]{package}/settings.py is Django's own, except DATABASES.[/dim]\n")
-    console.print("Next:")
+    console.print(f"  [dim]{package}/settings.py is Django's own, except DATABASES.[/dim]")
+    installed = ""
+    if not args.no_install:
+        try:
+            with console.status("Installing Django into .venv…"):
+                installed = scaffold.install_dependencies(folder)
+            console.print(
+                f"[green]✓[/green] Installed Django {series} and the other requirements into .venv ({installed})."
+            )
+        except scaffold.ScaffoldError as exc:
+            console.print(f"[yellow]! {exc}[/yellow]")
+    console.print("\nNext:")
     console.print(f"  cd {args.name}")
-    console.print("  python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt")
+    if installed:
+        console.print("  source .venv/bin/activate         [dim]# on Windows: .venv\\Scripts\\activate[/dim]")
+    else:
+        console.print(
+            "  uv venv && uv pip install -r requirements.txt   [dim]# or: python -m venv .venv, then pip[/dim]"
+        )
     console.print("  python manage.py runserver        [dim]# see it locally[/dim]")
     console.print(f"  {say('deploy')}                  [dim]# put it online[/dim]")
     return 0

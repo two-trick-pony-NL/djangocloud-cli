@@ -47,7 +47,11 @@ WSGI = "application = get_wsgi_application()\n"
 
 
 REAL_GENERATE = scaffold.generate
+REAL_INSTALL = scaffold.install_dependencies
 REAL_LATEST_LTS = scaffold.latest_lts  # the autouse fixture below fakes it for the CLI; these tests need the real one
+
+
+installs: list = []  # the folders `new` installed requirements into
 
 
 @pytest.fixture(autouse=True)
@@ -56,6 +60,7 @@ def fake_django(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(scaffold, "latest_lts", lambda releases=None: "5.2")
     calls = []
+    installs.clear()
 
     def generate(series, package, folder):
         calls.append((series, package, folder))
@@ -69,6 +74,7 @@ def fake_django(tmp_path, monkeypatch):
         (folder / package / "asgi.py").write_text("application = get_asgi_application()\n")
 
     monkeypatch.setattr(scaffold, "generate", generate)
+    monkeypatch.setattr(scaffold, "install_dependencies", lambda folder: installs.append(folder) or "uv")
     return calls
 
 
@@ -306,3 +312,55 @@ def test_a_failure_in_an_existing_empty_folder_empties_it_again(tmp_path, monkey
     monkeypatch.setattr(scaffold, "generate", odd)
     assert cli.run(["new", "shop"]) == 1
     assert (tmp_path / "shop").is_dir() and not list((tmp_path / "shop").iterdir())
+
+
+# ---- installing Django, so the project runs ----
+
+
+def test_new_installs_django_into_the_projects_venv_by_default(tmp_path, capsys):
+    assert cli.run(["new", "shop"]) == 0
+    assert installs == [tmp_path / "shop"]
+    out = capsys.readouterr().out
+    assert "Installed Django 5.2" in out and "source .venv/bin/activate" in out
+
+
+def test_no_install_skips_it_and_says_how_to_do_it_later(tmp_path, capsys):
+    assert cli.run(["new", "shop", "--no-install"]) == 0
+    assert installs == []
+    assert "uv pip install -r requirements.txt" in capsys.readouterr().out
+
+
+def test_a_failed_install_keeps_the_project_and_says_what_to_do(tmp_path, monkeypatch, capsys):
+    def broken(folder):
+        raise scaffold.ScaffoldError("Couldn't install the project's requirements: no network")
+
+    monkeypatch.setattr(scaffold, "install_dependencies", broken)
+    assert cli.run(["new", "shop"]) == 0  # the project exists and works; only the install is missing
+    out = capsys.readouterr().out
+    assert "no network" in out and "uv pip install -r requirements.txt" in out
+    assert (tmp_path / "shop" / "manage.py").is_file()
+
+
+def record_runs(monkeypatch):
+    runs = []
+    monkeypatch.setattr(scaffold.subprocess, "run", lambda command, **kw: runs.append((command, kw["cwd"])))
+    return runs
+
+
+def test_with_uv_it_makes_a_venv_and_installs_into_it(tmp_path, monkeypatch):
+    runs = record_runs(monkeypatch)
+    monkeypatch.setattr(scaffold.shutil, "which", lambda name: "/usr/bin/uv")
+    assert REAL_INSTALL(tmp_path) == "uv"
+    assert runs == [
+        (["uv", "venv", "--quiet"], tmp_path),
+        (["uv", "pip", "install", "--quiet", "-r", "requirements.txt"], tmp_path),
+    ]
+
+
+def test_without_uv_it_uses_the_python_running_the_cli(tmp_path, monkeypatch):
+    runs = record_runs(monkeypatch)
+    monkeypatch.setattr(scaffold.shutil, "which", lambda name: None)
+    assert REAL_INSTALL(tmp_path) == "pip"
+    assert runs[0][0][1:] == ["-m", "venv", ".venv"]
+    assert runs[1][0][1:4] == ["-m", "pip", "install"] and runs[1][0][-2:] == ["-r", "requirements.txt"]
+    assert all(cwd == tmp_path for _, cwd in runs)

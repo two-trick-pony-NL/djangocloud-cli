@@ -251,6 +251,43 @@ Documentation: {docs}
 """
 
 
+def _run(command: list[str], folder: Path, what: str) -> None:
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True, timeout=900, cwd=folder)  # noqa: S603
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip().splitlines()[-1:] or [str(exc)]
+        raise ScaffoldError(f"{what}: {detail[0]}") from None
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ScaffoldError(f"{what}: {exc}") from None
+
+
+def install_dependencies(folder: Path) -> str:
+    """Create `.venv` in the project and install requirements.txt into it, so `manage.py runserver` works straight
+    away. Uses uv when it is installed, else the Python running this CLI. Returns "uv" or "pip"."""
+    what = "Couldn't install the project's requirements"
+    if shutil.which("uv"):
+        _run(["uv", "venv", "--quiet"], folder, what)
+        _run(["uv", "pip", "install", "--quiet", "-r", "requirements.txt"], folder, what)  # uses ./.venv
+        return "uv"
+    _run([sys.executable, "-m", "venv", ".venv"], folder, what)
+    bin_dir = folder / ".venv" / ("Scripts" if sys.platform == "win32" else "bin")
+    _run(
+        [
+            str(bin_dir / "python"),
+            "-m",
+            "pip",
+            "install",
+            "--quiet",
+            "--disable-pip-version-check",
+            "-r",
+            "requirements.txt",
+        ],
+        folder,
+        what,
+    )
+    return "pip"
+
+
 def _undo(folder: Path, created: bool) -> None:
     """Remove what a failed run wrote: the whole folder if we made it, else just what is in it (it was empty)."""
     if created:
