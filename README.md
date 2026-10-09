@@ -53,6 +53,10 @@ Run `djangocloud` on its own for the menu of commands, `djangocloud help` for ev
 **`djangocloud <command>`** works as soon as the package is installed. There is nothing to add to your project, and it
 still works when your settings won't load.
 
+With [uv](https://docs.astral.sh/uv/) you don't need `manage.py` either. In a project that has `djangocloud-cli` as a
+dependency, run `uv run djangocloud <command>`. From anywhere, without installing it:
+`uvx --from djangocloud-cli djangocloud <command>`.
+
 **`python manage.py djangocloud <command>`** does the same thing from inside your project, but Django only finds a
 management command in an installed app. Add the app first, or you will see `Unknown command: 'djangocloud'`:
 

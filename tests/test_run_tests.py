@@ -169,3 +169,32 @@ def test_a_refused_deploy_explains_how_to_fix_it(api, project_dir, capsys):
     )
     assert deploy(api) == 1
     assert "only accepts deploys whose tests passed" in capsys.readouterr().err
+
+
+# ---- switched on by hand: the generic default is replaced by what works for this project ----
+
+
+def test_a_hand_switched_on_project_gets_its_real_command_not_the_generic_default(project_dir, tmp_path):
+    (project_dir / "pyproject.toml").write_text("[project]\ndependencies=['pytest','pytest-django']\n")
+    (project_dir / "uv.lock").write_text("")
+    (project_dir / "tests").mkdir()
+    (project_dir / "tests" / "test_a.py").write_text("def test_a(): pass\n")
+    build = {"run_tests": True, "test_command": cli.DEFAULT_TEST_COMMAND}
+    assert cli.test_command_for(project_dir, build) == "uv run pytest -q"
+    assert cli.test_command_for(project_dir, {"run_tests": True}) == "uv run pytest -q"  # no command at all
+
+
+def test_a_command_you_wrote_is_never_replaced(project_dir):
+    (project_dir / "tests").mkdir()
+    (project_dir / "tests" / "test_a.py").write_text("def test_a(): pass\n")
+    assert cli.test_command_for(project_dir, {"test_command": "make check"}) == "make check"
+
+
+def test_without_anything_to_detect_the_default_is_used(project_dir):
+    assert cli.test_command_for(project_dir, {"run_tests": True}) == cli.DEFAULT_TEST_COMMAND
+
+
+def test_the_command_that_ran_is_the_one_reported_to_the_server(api, project_dir):
+    set_build(project_dir, run_tests=True, test_command=PASS)
+    assert deploy(api) == 0
+    assert uploaded_fields(api)["tests_command"] == PASS

@@ -463,9 +463,23 @@ def ensure_build_settings(client: Client, root, wsgi_module: str | None = None, 
 DEFAULT_TEST_COMMAND = "python -m pytest -q"
 
 
-def run_tests(root, build: dict, extra: list[str] | None = None) -> tuple[int, int]:
-    """Run the project's own test command in its folder, streaming the output. Returns (exit code, seconds)."""
-    command = (build.get("test_command") or DEFAULT_TEST_COMMAND).strip()
+def test_command_for(root, build: dict) -> str:
+    """The command to run. One you wrote yourself is used as is. When it is missing or still the generic default (you
+    switched tests on by hand), the project is looked at, so a uv, Poetry or Django-runner project gets the command
+    that actually works there instead of a bare `python -m pytest`."""
+    command = (build.get("test_command") or "").strip()
+    if command and command != DEFAULT_TEST_COMMAND:
+        return command
+    setup = testing.detect(root / build.get("root", "."), build.get("django_settings_module", ""))
+    if setup.found:
+        console.print(f"[dim]Detected the test command for this project ({setup.label}).[/dim]")
+        return setup.command
+    return command or DEFAULT_TEST_COMMAND
+
+
+def run_tests(root, build: dict, extra: list[str] | None = None) -> tuple[int, int, str]:
+    """Run the project's own test command in its folder, streaming the output. Returns (exit code, seconds, command)."""
+    command = test_command_for(root, build)
     if extra:
         command += " " + " ".join(shlex.quote(a) for a in extra if a != "--")
     folder = root / build.get("root", ".")
@@ -476,12 +490,12 @@ def run_tests(root, build: dict, extra: list[str] | None = None) -> tuple[int, i
         code = subprocess.run(command, shell=True, cwd=folder).returncode  # noqa: S602
     except OSError as exc:
         raise CliError(f"Couldn't run the tests: {exc}") from None
-    return code, round(time.monotonic() - started)
+    return code, round(time.monotonic() - started), command
 
 
 def cmd_test(args, root) -> int:
     build = link.load_build(root) or {}
-    code, seconds = run_tests(root, build, args.extra)
+    code, seconds, _ = run_tests(root, build, args.extra)
     console.print(
         f"[green]✓[/green] Tests passed ({seconds}s)." if code == 0 else f"[red]Tests failed[/red] (exit {code})."
     )
@@ -528,8 +542,7 @@ def tests_before_deploy(root, build: dict, skip: bool) -> dict:
     if skip:
         console.print("[yellow]Skipping the tests (--skip-tests).[/yellow]")
         return {"tests": "skipped"}
-    command = (build.get("test_command") or DEFAULT_TEST_COMMAND).strip()
-    code, seconds = run_tests(root, build)
+    code, seconds, command = run_tests(root, build)
     if code != 0:
         raise CliError(
             f"The tests failed (exit {code}), so nothing was deployed. Fix them, or deploy anyway with "
