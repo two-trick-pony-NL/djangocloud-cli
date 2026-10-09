@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -11,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
-from . import __version__, auth, config, detect, envfile, link, onboarding, package
+from . import __version__, auth, config, detect, envfile, link, onboarding, package, testing
 from .api import ADVICE, ApiError, Client
 from .ui import CliError, NotInteractive, confirm, console, err, interactive, no_input, select, set_no_input, text
 
@@ -75,6 +76,32 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
         action="store_true",
         help="Deploy the latest commit of the project's linked GitHub repo instead of uploading this folder",
     )
+    deploy_flags.add_argument(
+        "--skip-tests",
+        action="store_true",
+        help='Skip the local test run that "run_tests": "local" asks for in .djangocloud/config.json',
+    )
+    test = sub.add_parser(
+        "test",
+        help="Run the project's tests now, the way a deploy would",
+        description='Run "test_command" from .djangocloud/config.json in the project (detected for you when you '
+        'switch tests on). A deploy runs it first when "run_tests" is true.',
+    )
+    test.add_argument("extra", nargs=argparse.REMAINDER, help="Extra arguments for the test command (after --)")
+    tests = sub.add_parser(
+        "tests",
+        help="Show or change whether tests run before each deploy",
+        description="Show the test settings, or change them: 'tests on' runs your tests before every deploy "
+        "(the command is detected from your project), 'tests off' stops. --require makes the project refuse "
+        "deploys whose tests did not pass.",
+    )
+    tests.add_argument("state", nargs="?", choices=["on", "off"], help="Run tests before deploys, or not")
+    tests.add_argument("--detect", action="store_true", help="Work out the test command from the project again")
+    tests.add_argument("--command", dest="command_text", metavar="CMD", help="Set the test command yourself")
+    tests.add_argument(
+        "--require", choices=["on", "off"], help="Make the project refuse deploys unless their tests passed"
+    )
+    tests.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
     sub.add_parser("unlink", help="Detach this folder from its project")
     status = sub.add_parser("status", help="Show whether the project is live, and its latest releases")
     status.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
@@ -397,6 +424,8 @@ def ensure_build_settings(client: Client, root, wsgi_module: str | None = None, 
         schema = client.get("/build-config")
         found, notes = detect.detect(root, schema)
         build = {**schema["defaults"], **found}
+        build.pop("run_tests", None)  # asked about once, after the first deploy's settings are written
+        build.pop("test_command", None)
         if wsgi_module:
             build["wsgi_module"] = wsgi_module
         if asgi_module:
@@ -427,6 +456,152 @@ def ensure_build_settings(client: Client, root, wsgi_module: str | None = None, 
     if missing:
         raise CliError(f"Missing {', '.join(missing)}: your dependencies must be listed so the image can install them.")
     return build
+
+
+DEFAULT_TEST_COMMAND = "python -m pytest -q"
+
+
+def run_tests(root, build: dict, extra: list[str] | None = None) -> tuple[int, int]:
+    """Run the project's own test command in its folder, streaming the output. Returns (exit code, seconds)."""
+    command = (build.get("test_command") or DEFAULT_TEST_COMMAND).strip()
+    if extra:
+        command += " " + " ".join(shlex.quote(a) for a in extra if a != "--")
+    folder = root / build.get("root", ".")
+    console.print(f"[bold]Running tests[/bold]  [dim]{command}[/dim]")
+    started = time.monotonic()
+    try:
+        # The command is the user's own, from their own config file, and is meant to be a shell command.
+        code = subprocess.run(command, shell=True, cwd=folder).returncode  # noqa: S602
+    except OSError as exc:
+        raise CliError(f"Couldn't run the tests: {exc}") from None
+    return code, round(time.monotonic() - started)
+
+
+def cmd_test(args, root) -> int:
+    build = link.load_build(root) or {}
+    code, seconds = run_tests(root, build, args.extra)
+    console.print(
+        f"[green]✓[/green] Tests passed ({seconds}s)." if code == 0 else f"[red]Tests failed[/red] (exit {code})."
+    )
+    return 0 if code == 0 else 1
+
+
+def show_test_setup(setup: "testing.TestSetup") -> None:
+    console.print(f"  Found {setup.label}.")
+    console.print(f"  Command   [bold]{setup.command}[/bold]")
+    for reason in setup.reasons:
+        console.print(f"  [dim]· {reason}[/dim]")
+    for warning in setup.warnings:
+        console.print(f"  [yellow]! {warning}[/yellow]")
+
+
+def ask_about_tests(root, build: dict, *, assume_yes: bool = False) -> dict:
+    """Once per project: offer to run the tests before every deploy. The answer, yes or no, is written to
+    .djangocloud/config.json so it is never asked again. Scripts (no terminal, --yes) are never asked and nothing is
+    written: their behavior must not change on its own."""
+    if "run_tests" in build or assume_yes or not interactive():
+        return build
+    setup = testing.detect(root, build.get("django_settings_module", ""))
+    if not setup.found:
+        return build  # nothing to run: say nothing, ask nothing
+    console.print("\n[bold]Tests[/bold]")
+    show_test_setup(setup)
+    if confirm("Run your tests before every deploy? (a failing test stops the deploy)", default=True):
+        build = {**build, "run_tests": True, "test_command": setup.command}
+        console.print(f"[green]✓[/green] Tests will run before each deploy. Change it with '{say('tests off')}'.")
+    else:
+        build = {**build, "run_tests": False}
+        console.print(f"Okay. Turn it on any time with '{say('tests on')}'.")
+    link.save_build(root, build)
+    return build
+
+
+def tests_before_deploy(root, build: dict, skip: bool) -> dict:
+    """Run the tests if the project asked for it. Returns the report that goes to the server with the upload:
+    {"tests": "passed" | "skipped" | "none", "tests_command", "tests_seconds"}. A failing run stops the deploy."""
+    if not build.get("run_tests"):
+        if skip:
+            console.print("[dim]--skip-tests: this project does not run tests before deploys anyway.[/dim]")
+        return {"tests": "none"}
+    if skip:
+        console.print("[yellow]Skipping the tests (--skip-tests).[/yellow]")
+        return {"tests": "skipped"}
+    command = (build.get("test_command") or DEFAULT_TEST_COMMAND).strip()
+    code, seconds = run_tests(root, build)
+    if code != 0:
+        raise CliError(
+            f"The tests failed (exit {code}), so nothing was deployed. Fix them, or deploy anyway with "
+            f"'{say('deploy --skip-tests')}'."
+        )
+    console.print(f"[green]✓[/green] Tests passed ({seconds}s).")
+    return {"tests": "passed", "tests_command": command, "tests_seconds": str(seconds)}
+
+
+def _tests_summary(build: dict, policy: dict | None) -> None:
+    on = bool(build.get("run_tests"))
+    console.print(
+        f"Tests before deploy: {_onoff(on)}" + (f"  [dim]{build.get('test_command', '')}[/dim]" if on else "")
+    )
+    if policy is not None:
+        console.print(f"The project requires passing tests: {_onoff(policy['require'])}")
+        last = policy.get("last")
+        if last:
+            console.print(f"  [dim]Last reported: v{last['version']} {last['status']}[/dim]")
+
+
+def cmd_tests(args, root) -> int:
+    """Show or change the test settings: this folder's (config.json) and the project's policy (the server)."""
+    build = link.load_build(root)
+    if build is None:
+        raise CliError(f"No build settings yet. Run '{say('deploy')}' once first, or '{say('link')}'.")
+    changed = False
+    django_settings = build.get("django_settings_module", "")
+    if args.state == "on":
+        if args.detect or not build.get("test_command"):
+            setup = testing.detect(root, django_settings)
+            if setup.found:
+                show_test_setup(setup)
+                build = {**build, "test_command": setup.command}
+            else:
+                build = {**build, "test_command": build.get("test_command") or DEFAULT_TEST_COMMAND}
+        build = {**build, "run_tests": True}
+        changed = True
+    elif args.state == "off":
+        build = {**build, "run_tests": False}
+        changed = True
+    elif args.detect:
+        setup = testing.detect(root, django_settings)
+        if not setup.found:
+            raise CliError(" ".join(setup.warnings) or "Couldn't find your tests.")
+        show_test_setup(setup)
+        build = {**build, "test_command": setup.command}
+        changed = True
+    if args.command_text:
+        build = {**build, "test_command": args.command_text}
+        changed = True
+    if changed:
+        link.save_build(root, build)
+        console.print(f"[green]✓[/green] Saved to {link.DIR}/{link.FILE}.")
+    policy = None
+    if args.require or not changed:
+        client = make_client()
+        ensure_login(client)
+        project = resolve_project(client, root, args)
+        path = f"/projects/{project['id']}/tests"
+        if args.require:
+            policy = _put(client, path, {"require": args.require == "on"})
+            if policy["require"] and not build.get("run_tests"):
+                console.print(
+                    f"[yellow]This folder doesn't run tests, so deploys from it will be refused. "
+                    f"Turn them on with '{say('tests on')}'.[/yellow]"
+                )
+        else:
+            try:
+                policy = get_or_explain(client, path)
+            except CliError:
+                policy = None  # a server that predates the policy: show the folder's setting only
+    _tests_summary(build, policy)
+    return 0
 
 
 def git_sha(root) -> str:
@@ -496,8 +671,12 @@ def cmd_deploy(args, root) -> int:
     if args.github:
         console.print("Deploying the latest commit from the linked GitHub repository.")
         data = None
+        if args.skip_tests:
+            console.print("[dim]--skip-tests has no effect on a GitHub deploy: tests run from this folder only.[/dim]")
     else:
-        ensure_build_settings(client, root, args.wsgi_module, args.asgi_module)
+        build = ensure_build_settings(client, root, args.wsgi_module, args.asgi_module)
+        build = ask_about_tests(root, build, assume_yes=args.yes)
+        fields |= tests_before_deploy(root, build, args.skip_tests)
         try:
             data, count = package.build(root)
         except package.PackageError as exc:
@@ -514,7 +693,7 @@ def cmd_deploy(args, root) -> int:
             content=data,
         )
     except ApiError as exc:
-        if exc.code == "deploy_in_progress":
+        if exc.code in ("deploy_in_progress", "tests_required"):
             raise CliError(exc.message) from None
         raise explain(exc) from None
     console.print(f"[green]✓[/green] Uploaded. Release v{release['version']} started.")
@@ -1081,6 +1260,8 @@ def _db_snapshot(client: Client, args, project: dict, found: dict, path: str) ->
 
 
 COMMANDS = {
+    "test": cmd_test,
+    "tests": cmd_tests,
     "autoscale": cmd_autoscale,
     "alerts": cmd_alerts,
     "metrics": cmd_metrics,

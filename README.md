@@ -160,6 +160,33 @@ then the source of truth, so edit it to change how your app is built:
 The server checks every setting and lists all problems at once. The full list with defaults is at
 `/api/v1/build-config`. If your WSGI app can't be detected in CI, pass `--wsgi-module config.wsgi:application`.
 
+### Tests before every deploy
+
+The first interactive deploy looks at your project and, if it finds tests, offers to run them before each deploy. It
+works out the command for your setup, so there is nothing to type:
+
+- **pytest** or **Django's own runner** (`manage.py test`), and **pytest-django** when it is installed
+- your environment: `uv run`, `poetry run` or `pipenv run` when the project uses them
+- speed: `-n auto` with pytest-xdist, `--parallel` with Django's runner
+- a dedicated test settings module (`settings_test.py`, `settings/test.py`, ...), passed as `--ds` or `--settings`
+- warnings for what usually goes wrong: pytest without pytest-django, tests that need a PostgreSQL or MySQL server
+
+```bash
+djangocloud tests            # what is set, and whether the project requires passing tests
+djangocloud tests on         # run the tests before every deploy (the command is detected)
+djangocloud tests off
+djangocloud tests --command "make check"
+djangocloud tests --require on   # the project refuses deploys unless their tests passed
+djangocloud test             # run the tests now, the way a deploy would
+djangocloud deploy --skip-tests
+```
+
+The settings live in `.djangocloud/config.json` (`run_tests`, `test_command`). The answer to the question is written
+there, so you are asked once. Scripts and CI (`--yes`, no terminal) are never asked. A failing test stops the deploy
+before anything is uploaded; the result (passed, skipped, how long) is recorded on the release and shows in the
+dashboard. It is reported by the CLI, so "require passing tests" guards against mistakes, not against someone who
+sends the flag without running anything.
+
 ### Rolling back
 
 ```

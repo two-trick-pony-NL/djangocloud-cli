@@ -35,6 +35,7 @@ class FakeApi:
             },
         ]
         self.requests = []
+        self.tests_policy = {"require": False, "last": None}
         self.rollback_requests = []
         self.rollback_error = None  # (status, body) to answer POST /projects/<id>/rollback with
         self.env_existing = []  # names already on the project
@@ -164,6 +165,8 @@ class FakeApi:
                         return
                     if not self._authed():
                         return
+                    if parsed.path.endswith("/tests"):
+                        return self._reply(200, api.tests_policy)
                     if parsed.path.endswith("/env"):
                         return self._reply(200, {"variables": [{"key": k, "updated_at": "2026-10-08T10:00:00+00:00"}
                                                                for k in api.env_existing], "max": 200})  # fmt: skip
@@ -278,6 +281,9 @@ class FakeApi:
                     api.aws, api.setup_step = True, "ready"
                     return self._reply(200, {"connected": True, "region": body["region"],
                                              "account_id": "123456789012"})  # fmt: skip
+                if self.path.endswith("/tests"):
+                    api.tests_policy = {**api.tests_policy, **body}
+                    return self._reply(200, api.tests_policy)
                 if self.path.endswith("/env"):
                     if api.old_server:
                         return self._reply_html_404()
