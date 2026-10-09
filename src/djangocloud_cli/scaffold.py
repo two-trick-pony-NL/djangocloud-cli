@@ -1,34 +1,55 @@
-"""`djangocloud new <name>`: a stock Django project, with only the database settings changed.
+"""`djangocloud new <name>`: a project made by Django's own `django-admin startproject`, with only the database
+settings changed.
 
-The files are what `django-admin startproject` writes for the current LTS release, bundled here so the CLI needs
-neither Django nor a network connection to create a project. The one difference is the DATABASES block: SQLite on
-your computer, and the Postgres database DjangoCloud creates for you as soon as the app runs there (it adds the
-connection details to the deployment's environment). Nothing else in the project is touched; DjangoCloud adds what
-a deployed app needs (static files, allowed hosts, the Postgres driver) itself when it builds the image.
+Nothing is bundled and nothing needs updating when Django ships a new LTS:
 
-To move to a newer LTS: change DJANGO_LTS, and compare the templates below with `django-admin startproject` output.
+1. the newest stable LTS series (the X.2 releases: 4.2, 5.2, 6.2, ...) is looked up on PyPI,
+2. that Django is installed on demand, away from your environment (`uvx`, or a throwaway virtual environment), so it
+   never changes what is installed in your project,
+3. the real `django-admin startproject` runs,
+4. the DATABASES block of the generated settings.py is replaced: SQLite on your computer, and the Postgres database
+   DjangoCloud creates for you as soon as the app runs there (DjangoCloud adds the connection details to the
+   deployment's environment when you select and connect a database),
+5. `djangocloud_cli` is added to INSTALLED_APPS (so `python manage.py djangocloud <command>` works), and
+   `djangocloud-cli` to requirements.txt (the app has to be installed wherever the project runs).
+
+Nothing else is touched; DjangoCloud adds what a deployed app needs (static files, allowed hosts, the Postgres
+driver) itself when it builds the image.
 """
 
 from __future__ import annotations
 
+import json
 import keyword
-import secrets
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
+import urllib.error
+import urllib.request
 from pathlib import Path
 
-DJANGO_LTS = "5.2"  # the latest long-term-support release; 4.2 and 5.2 are LTS, the next is 6.2
+from . import __version__, link
 
-SECRET_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*(-_=+)"  # noqa: S105 - the characters a key is drawn from, not a secret
+PYPI_DJANGO = "https://pypi.org/pypi/django/json"
+LTS_RELEASE = re.compile(r"^(\d+)\.2\.(\d+)$")  # 4.2.x, 5.2.x ...: every X.2 series is a long-term-support release
 
 
 class ScaffoldError(Exception):
     """The message is safe to show the person who asked."""
 
 
+def in_project(start: Path | None = None) -> Path | None:
+    """The project you are inside (a linked folder, or one with manage.py), or None."""
+    root = link.find_root(start)
+    return root if (root / link.DIR / link.FILE).is_file() or (root / "manage.py").is_file() else None
+
+
 def package_name(name: str) -> str:
     """The Python package for a project called `name` ('my-shop' -> 'my_shop'), or raise ScaffoldError."""
     package = name.replace("-", "_")
-    if not name or not all(c.isalnum() or c in "-_" for c in name) or not name.isascii():
+    if not name or not name.isascii() or not all(c.isalnum() or c in "-_" for c in name):
         raise ScaffoldError("Use letters, digits, '-' and '_' only, for example: djangocloud new my-shop")
     if not package.isidentifier():
         raise ScaffoldError(f"{name!r} can't be a Python package name (it must not start with a digit).")
@@ -37,92 +58,62 @@ def package_name(name: str) -> str:
     return package
 
 
-MANAGE_PY = '''#!/usr/bin/env python
-"""Django's command-line utility for administrative tasks."""
-import os
-import sys
-
-
-def main():
-    """Run administrative tasks."""
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "{name}.settings")
+def fetch_json(url: str) -> dict:
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})  # noqa: S310 - fixed https URL
     try:
-        from django.core.management import execute_from_command_line
-    except ImportError as exc:
-        raise ImportError(
-            "Couldn't import Django. Are you sure it's installed and "
-            "available on your PYTHONPATH environment variable? Did you "
-            "forget to activate a virtual environment?"
-        ) from exc
-    execute_from_command_line(sys.argv)
+        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
+            return json.loads(response.read())
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        raise ScaffoldError(f"Couldn't look up the latest Django LTS on PyPI ({exc}). Check your connection.") from None
 
 
-if __name__ == "__main__":
-    main()
-'''
+def latest_lts(releases: dict | None = None) -> str:
+    """The newest stable LTS series, like '5.2'. Pre-releases and fully yanked releases are ignored."""
+    if releases is None:
+        releases = fetch_json(PYPI_DJANGO)["releases"]
+    found = []
+    for version, files in releases.items():
+        match = LTS_RELEASE.match(version)
+        if match and files and not all(f.get("yanked") for f in files):
+            found.append((int(match.group(1)), int(match.group(2)), version))
+    if not found:
+        raise ScaffoldError("Couldn't find a Django LTS release on PyPI.")
+    major = max(found)[0]
+    return f"{major}.2"
 
-ASGI_PY = '''"""
-ASGI config for {name} project.
 
-It exposes the ASGI callable as a module-level variable named ``application``.
+def requirement(series: str) -> str:
+    return f"Django~={series}.0"
 
-For more information on this file, see
-https://docs.djangoproject.com/en/{lts}/howto/deployment/asgi/
-"""
 
-import os
+def generate(series: str, package: str, folder: Path) -> None:
+    """Run the real `django-admin startproject`, with Django installed just for this (never in your environment)."""
+    spec = requirement(series)
+    try:
+        if shutil.which("uvx"):
+            command = ["uvx", "--quiet", "--from", spec, "django-admin", "startproject", package, str(folder)]
+            subprocess.run(command, check=True, capture_output=True, text=True, timeout=300)  # noqa: S603
+            return
+        with tempfile.TemporaryDirectory() as tmp:
+            venv = Path(tmp) / "venv"
+            subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, capture_output=True, timeout=300)  # noqa: S603
+            bin_dir = venv / ("Scripts" if sys.platform == "win32" else "bin")
+            subprocess.run(  # noqa: S603
+                [str(bin_dir / "python"), "-m", "pip", "install", "--quiet", "--disable-pip-version-check", spec],
+                check=True, capture_output=True, text=True, timeout=600,
+            )  # fmt: skip
+            subprocess.run(  # noqa: S603
+                [str(bin_dir / "django-admin"), "startproject", package, str(folder)],
+                check=True, capture_output=True, text=True, timeout=300,
+            )  # fmt: skip
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip().splitlines()[-1:] or [str(exc)]
+        raise ScaffoldError(f"Couldn't create the Django {series} project: {detail[0]}") from None
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ScaffoldError(f"Couldn't create the Django {series} project: {exc}") from None
 
-from django.core.asgi import get_asgi_application
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "{name}.settings")
-
-application = get_asgi_application()
-'''
-
-WSGI_PY = '''"""
-WSGI config for {name} project.
-
-It exposes the WSGI callable as a module-level variable named ``application``.
-
-For more information on this file, see
-https://docs.djangoproject.com/en/{lts}/howto/deployment/wsgi/
-"""
-
-import os
-
-from django.core.wsgi import get_wsgi_application
-
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "{name}.settings")
-
-application = get_wsgi_application()
-'''
-
-URLS_PY = '''"""
-URL configuration for {name} project.
-
-The `urlpatterns` list routes URLs to views. For more information please see:
-    https://docs.djangoproject.com/en/{lts}/topics/http/urls/
-Examples:
-Function views
-    1. Add an import:  from my_app import views
-    2. Add a URL to urlpatterns:  path('', views.home, name='home')
-Class-based views
-    1. Add an import:  from other_app.views import Home
-    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
-Including another URLconf
-    1. Import the include() function: from django.urls import include, path
-    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
-"""
-
-from django.contrib import admin
-from django.urls import path
-
-urlpatterns = [
-    path("admin/", admin.site.urls),
-]
-'''
-
-# The DATABASES block is the only part that differs from `django-admin startproject`.
+# The only part of the generated project that is changed.
 DATABASES_BLOCK = """# On your computer: a local SQLite file, so manage.py works without any setup.
 DATABASES = {
     "default": {
@@ -145,160 +136,63 @@ if "DJANGOCLOUD_HOSTED_DB_NAME" in os.environ:
     }
 """
 
-SETTINGS_PY = '''"""
-Django settings for {name} project.
-
-Generated by 'djangocloud new' using Django {lts}.
-
-For more information on this file, see
-https://docs.djangoproject.com/en/{lts}/topics/settings/
-
-For the full list of settings and their values, see
-https://docs.djangoproject.com/en/{lts}/ref/settings/
-"""
-
-import os
-from pathlib import Path
-
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
+_STOCK_DATABASES = re.compile(r"^DATABASES = \{\n.*?\n\}\n", re.DOTALL | re.MULTILINE)
+_PATHLIB_IMPORT = re.compile(r"^from pathlib import Path\n", re.MULTILINE)
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/{lts}/howto/deployment/checklist/
-
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "{secret}"
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
-ALLOWED_HOSTS = []
-
-
-# Application definition
-
-INSTALLED_APPS = [
-    "django.contrib.admin",
-    "django.contrib.auth",
-    "django.contrib.contenttypes",
-    "django.contrib.sessions",
-    "django.contrib.messages",
-    "django.contrib.staticfiles",
-]
-
-MIDDLEWARE = [
-    "django.middleware.security.SecurityMiddleware",
-    "django.contrib.sessions.middleware.SessionMiddleware",
-    "django.middleware.common.CommonMiddleware",
-    "django.middleware.csrf.CsrfViewMiddleware",
-    "django.contrib.auth.middleware.AuthenticationMiddleware",
-    "django.contrib.messages.middleware.MessageMiddleware",
-    "django.middleware.clickjacking.XFrameOptionsMiddleware",
-]
-
-ROOT_URLCONF = "{name}.urls"
-
-TEMPLATES = [
-    {{
-        "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
-        "APP_DIRS": True,
-        "OPTIONS": {{
-            "context_processors": [
-                "django.template.context_processors.request",
-                "django.contrib.auth.context_processors.auth",
-                "django.contrib.messages.context_processors.messages",
-            ],
-        }},
-    }},
-]
-
-WSGI_APPLICATION = "{name}.wsgi.application"
+def patch_settings(text: str) -> str:
+    """Replace the stock DATABASES block (and add `import os`). Raises if Django's settings no longer look like that,
+    rather than writing a project that is not wired to the database."""
+    if not _STOCK_DATABASES.search(text) or "BASE_DIR" not in text:
+        raise ScaffoldError(
+            "The settings.py Django generated has a different DATABASES block than expected, so it was left as "
+            "it is. Add the database settings from the DjangoCloud docs (Databases) by hand."
+        )
+    if not re.search(r"^import os$", text, re.MULTILINE):
+        text = (
+            _PATHLIB_IMPORT.sub("import os\nfrom pathlib import Path\n", text, count=1)
+            if _PATHLIB_IMPORT.search(text)
+            else "import os\n" + text
+        )
+    patched = _STOCK_DATABASES.sub(lambda _: DATABASES_BLOCK, text, count=1)
+    compile(patched, "settings.py", "exec")
+    return patched
 
 
-# Database
-# https://docs.djangoproject.com/en/{lts}/ref/settings/#databases
-
-{databases}
-
-# Password validation
-# https://docs.djangoproject.com/en/{lts}/ref/settings/#auth-password-validators
-
-AUTH_PASSWORD_VALIDATORS = [
-    {{
-        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
-    }},
-    {{
-        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
-    }},
-    {{
-        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
-    }},
-    {{
-        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
-    }},
-]
+_INSTALLED_APPS = re.compile(r"^INSTALLED_APPS = \[\n.*?\n\]\n", re.DOTALL | re.MULTILINE)
+APP_NAME = "djangocloud_cli"
 
 
-# Internationalization
-# https://docs.djangoproject.com/en/{lts}/topics/i18n/
-
-LANGUAGE_CODE = "en-us"
-
-TIME_ZONE = "UTC"
-
-USE_I18N = True
-
-USE_TZ = True
+def add_installed_app(text: str) -> str:
+    """Add our app to INSTALLED_APPS, at the end. Left alone if it is there already or the list is not where it
+    always is (the project still works; only `manage.py djangocloud` would be missing)."""
+    found = _INSTALLED_APPS.search(text)
+    if not found or f'"{APP_NAME}"' in found.group(0):
+        return text
+    block = found.group(0)
+    return text.replace(block, block[: -len("]\n")] + f'    "{APP_NAME}",\n]\n', 1)
 
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/{lts}/howto/static-files/
-
-STATIC_URL = "static/"
-
-# Default primary key field type
-# https://docs.djangoproject.com/en/{lts}/ref/settings/#default-auto-field
-
-DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-'''
-
-GITIGNORE = """__pycache__/
-*.pyc
-.venv/
-db.sqlite3
-.env
-staticfiles/
-"""
+def cli_requirement(version: str = __version__) -> str:
+    """The requirements.txt line for this CLI: at least the version that made the project (unpinned for a checkout)."""
+    found = re.match(r"(\d+)\.(\d+)\.(\d+)", version or "")
+    if not found or found.groups() == ("0", "0", "0"):
+        return "djangocloud-cli"
+    return "djangocloud-cli>=" + ".".join(found.groups())
 
 
-def files_for(name: str) -> dict[str, str]:
-    """Every file of the new project, by path relative to the project folder."""
+def create(parent: Path, name: str, *, series: str | None = None) -> tuple[Path, str]:
+    """Create parent/name. Returns (folder, Django series). Refuses a folder that already has something in it."""
     package = package_name(name)
-    secret = "django-insecure-" + "".join(secrets.choice(SECRET_ALPHABET) for _ in range(50))
-    fill = {"name": package, "lts": DJANGO_LTS}
-    return {
-        "manage.py": MANAGE_PY.format(**fill),
-        f"{package}/__init__.py": "",
-        f"{package}/asgi.py": ASGI_PY.format(**fill),
-        f"{package}/wsgi.py": WSGI_PY.format(**fill),
-        f"{package}/urls.py": URLS_PY.format(**fill),
-        f"{package}/settings.py": SETTINGS_PY.format(secret=secret, databases=DATABASES_BLOCK, **fill),
-        "requirements.txt": f"Django~={DJANGO_LTS}.0\n",
-        ".gitignore": GITIGNORE,
-    }
-
-
-def create(parent: Path, name: str) -> Path:
-    """Write the project into parent/name. Refuses a folder that already has something in it."""
-    files = files_for(name)
     folder = parent / name
     if folder.exists() and (not folder.is_dir() or any(folder.iterdir())):
         raise ScaffoldError(f"{name!r} already exists and isn't empty. Pick another name, or remove it first.")
-    for relative, content in files.items():
-        path = folder / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content)
-    (folder / "manage.py").chmod(0o755)
-    return folder
+    series = series or latest_lts()
+    generate(series, package, folder)
+    settings = folder / package / "settings.py"
+    if not settings.is_file():
+        raise ScaffoldError("Django did not create the expected settings.py.")
+    settings.write_text(add_installed_app(patch_settings(settings.read_text())))
+    (folder / "requirements.txt").write_text(f"{requirement(series)}\n{cli_requirement()}\n")
+    (folder / ".gitignore").write_text("__pycache__/\n*.pyc\n.venv/\ndb.sqlite3\n.env\nstaticfiles/\n")
+    return folder, series

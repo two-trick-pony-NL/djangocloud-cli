@@ -56,12 +56,19 @@ cd my-shop
 djangocloud deploy
 ```
 
-`new` takes only the name. It creates a stock Django project for the latest LTS release (5.2), exactly what
-`django-admin startproject` writes, so you don't need Django installed to run it. The one change is the `DATABASES`
-setting: a local SQLite file on your computer, and the Postgres database DjangoCloud creates for you as soon as the
-app runs there (DjangoCloud adds the `DJANGOCLOUD_HOSTED_DB_*` variables to the deployment when you select and connect
-a database). Everything else a deployed app needs, such as static files and allowed hosts, DjangoCloud adds when it
-builds the image. The project's folder name can use letters, digits, `-` and `_`.
+`new` takes only the name. It looks up the latest Django LTS release, runs Django's own `django-admin startproject` for
+it (Django is installed just for that, away from your environment, so it needs a network connection), and creates
+`my-shop/`. Two things differ from a plain `startproject`:
+
+- **`DATABASES`**: a local SQLite file on your computer, and the Postgres database DjangoCloud creates for you as soon as
+  the app runs there. DjangoCloud adds the `DJANGOCLOUD_HOSTED_DB_*` variables to the deployment when you select and
+  connect a database, and the settings switch to them.
+- **`djangocloud_cli`** is in `INSTALLED_APPS` and `djangocloud-cli` in `requirements.txt`, so
+  `python manage.py djangocloud <command>` works too.
+
+Everything else a deployed app needs, such as static files and allowed hosts, DjangoCloud adds when it builds the image.
+When a new LTS comes out, `new` uses it without a CLI update. Inside an existing project the command is not shown, and
+refuses to run.
 
 ### Two ways to run it
 

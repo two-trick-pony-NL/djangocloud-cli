@@ -44,10 +44,10 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
 
     new = sub.add_parser(
         "new",
-        help="Create a new Django project that is ready to deploy",
-        description=f"Create a folder with a stock Django {scaffold.DJANGO_LTS} (LTS) project, exactly what "
-        "'django-admin startproject' writes, except that the database settings use SQLite on your computer and the "
-        "Postgres database DjangoCloud creates for you once it runs there.",
+        help=argparse.SUPPRESS if scaffold.in_project() else "Create a new Django project that is ready to deploy",
+        description="Create a folder with a project made by Django's own 'django-admin startproject' for the latest "
+        "LTS release. Only the database settings differ: SQLite on your computer, and the Postgres database "
+        "DjangoCloud creates for you once it runs there. Needs a network connection.",
     )
     new.add_argument("name", help="The project's name, e.g. my-shop (also the folder it is created in)")
     sub.add_parser("login", help="Sign in (approve a code in your browser)")
@@ -333,13 +333,22 @@ def create_project(client: Client, root, args) -> dict:
 
 
 def cmd_new(args, root) -> int:
+    inside = scaffold.in_project()
+    if inside:
+        raise CliError(
+            f"You are already inside a Django project ({inside}), so there is nothing to create here. "
+            f"'{say('new')}' starts a project: run it from the folder where the new one should live."
+        )
     try:
-        folder = scaffold.create(Path.cwd(), args.name)
+        package = scaffold.package_name(args.name)
+        series = scaffold.latest_lts()
+        console.print(f"Creating a Django {series} (LTS) project…")
+        with console.status("Setting up Django, one moment…"):
+            folder, series = scaffold.create(Path.cwd(), args.name, series=series)
     except scaffold.ScaffoldError as exc:
         raise CliError(str(exc)) from None
-    package = scaffold.package_name(args.name)
-    console.print(f"[green]✓[/green] Created [bold]{args.name}[/bold] (Django {scaffold.DJANGO_LTS} LTS) in {folder}")
-    console.print(f"  [dim]{package}/settings.py is the stock settings, except DATABASES.[/dim]\n")
+    console.print(f"[green]✓[/green] Created [bold]{args.name}[/bold] (Django {series} LTS) in {folder}")
+    console.print(f"  [dim]{package}/settings.py is Django's own, except DATABASES.[/dim]\n")
     console.print("Next:")
     console.print(f"  cd {args.name}")
     console.print("  python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt")
@@ -1329,7 +1338,7 @@ def full_help(parser: argparse.ArgumentParser) -> str:
     def walk(p: argparse.ArgumentParser) -> None:
         group = next((a for a in p._actions if isinstance(a, argparse._SubParsersAction)), None)
         for name, sub in group.choices.items() if group else ():
-            if name == "help":
+            if name == "help" or (name == "new" and scaffold.in_project()):
                 continue
             sections.append(sub.format_help().rstrip())
             walk(sub)
