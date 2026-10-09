@@ -49,7 +49,11 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
         "LTS release. Only the database settings differ: SQLite on your computer, and the Postgres database "
         "DjangoCloud creates for you once it runs there. Needs a network connection.",
     )
-    new.add_argument("name", help="The project's name, e.g. my-shop (also the folder it is created in)")
+    new.add_argument(
+        "name",
+        nargs="?",
+        help="The project's name, e.g. my-shop; also the folder it is created in (asked for if you leave it out)",
+    )
     new.add_argument(
         "--no-install",
         action="store_true",
@@ -337,6 +341,20 @@ def create_project(client: Client, root, args) -> dict:
         raise
 
 
+def ask_project_name() -> str:
+    """Ask for the project's name (a terminal is needed), until it is one we can create."""
+    if not interactive():
+        raise CliError(f"Give the project a name, for example: {say('new my-shop')}")
+    for _ in range(3):
+        name = text("Project name (letters, digits, - and _)").strip()
+        try:
+            scaffold.check_target(Path.cwd(), name)
+            return name
+        except scaffold.ScaffoldError as exc:
+            console.print(f"[red]{exc}[/red]")
+    raise CliError("No usable project name was given.")
+
+
 def cmd_new(args, root) -> int:
     inside = scaffold.in_project()
     if inside:
@@ -344,15 +362,16 @@ def cmd_new(args, root) -> int:
             f"You are already inside a Django project ({inside}), so there is nothing to create here. "
             f"'{say('new')}' starts a project: run it from the folder where the new one should live."
         )
+    name = args.name or ask_project_name()
     try:
-        package = scaffold.package_name(args.name)
+        package = scaffold.package_name(name)
         series = scaffold.latest_lts()
         console.print(f"Creating a Django {series} (LTS) project…")
         with console.status("Setting up Django, one moment…"):
-            folder, series = scaffold.create(Path.cwd(), args.name, series=series)
+            folder, series = scaffold.create(Path.cwd(), name, series=series)
     except scaffold.ScaffoldError as exc:
         raise CliError(str(exc)) from None
-    console.print(f"[green]✓[/green] Created [bold]{args.name}[/bold] (Django {series} LTS) in {folder}")
+    console.print(f"[green]✓[/green] Created [bold]{name}[/bold] (Django {series} LTS) in {folder}")
     console.print(f"  [dim]{package}/settings.py is Django's own, except DATABASES.[/dim]")
     installed = ""
     if not args.no_install:
@@ -365,7 +384,7 @@ def cmd_new(args, root) -> int:
         except scaffold.ScaffoldError as exc:
             console.print(f"[yellow]! {exc}[/yellow]")
     console.print("\nNext:")
-    console.print(f"  cd {args.name}")
+    console.print(f"  cd {name}")
     if installed:
         console.print("  source .venv/bin/activate         [dim]# on Windows: .venv\\Scripts\\activate[/dim]")
     else:

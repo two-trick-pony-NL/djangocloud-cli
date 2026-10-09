@@ -297,12 +297,19 @@ def _undo(folder: Path, created: bool) -> None:
         shutil.rmtree(child, ignore_errors=True) if child.is_dir() else child.unlink(missing_ok=True)
 
 
-def create(parent: Path, name: str, *, series: str | None = None) -> tuple[Path, str]:
-    """Create parent/name. Returns (folder, Django series). Refuses a folder that already has something in it."""
-    package = package_name(name)
+def check_target(parent: Path, name: str) -> Path:
+    """parent/name if a project can be created there: a valid name, and no folder with files in it already."""
+    package_name(name)
     folder = parent / name
     if folder.exists() and (not folder.is_dir() or any(folder.iterdir())):
         raise ScaffoldError(f"{name!r} already exists and isn't empty. Pick another name, or remove it first.")
+    return folder
+
+
+def create(parent: Path, name: str, *, series: str | None = None) -> tuple[Path, str]:
+    """Create parent/name. Returns (folder, Django series). Refuses a folder that already has something in it."""
+    package = package_name(name)
+    folder = check_target(parent, name)
     series = series or latest_lts()
     created = not folder.exists()
     folder.mkdir(parents=True, exist_ok=True)  # django-admin wants the folder to exist already

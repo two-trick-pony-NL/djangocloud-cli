@@ -364,3 +364,56 @@ def test_without_uv_it_uses_the_python_running_the_cli(tmp_path, monkeypatch):
     assert runs[0][0][1:] == ["-m", "venv", ".venv"]
     assert runs[1][0][1:4] == ["-m", "pip", "install"] and runs[1][0][-2:] == ["-r", "requirements.txt"]
     assert all(cwd == tmp_path for _, cwd in runs)
+
+
+# ---- asking for the name ----
+
+
+def answers(monkeypatch, *names):
+    queue = list(names)
+    monkeypatch.setattr(cli, "interactive", lambda: True)
+    asked = []
+    monkeypatch.setattr(cli, "text", lambda message, default="": asked.append(message) or queue.pop(0))
+    return asked
+
+
+def test_without_a_name_it_asks_for_one(tmp_path, monkeypatch, capsys):
+    asked = answers(monkeypatch, "  my-shop ")
+    assert cli.run(["new"]) == 0
+    assert len(asked) == 1 and "Project name" in asked[0]
+    assert (tmp_path / "my-shop" / "manage.py").is_file()
+    assert "Created my-shop" in capsys.readouterr().out
+
+
+def test_a_name_on_the_command_line_is_not_asked_for_again(tmp_path, monkeypatch):
+    asked = answers(monkeypatch)
+    assert cli.run(["new", "shop"]) == 0
+    assert asked == []
+
+
+def test_a_bad_name_is_explained_and_asked_for_again(tmp_path, monkeypatch, capsys):
+    (tmp_path / "taken").mkdir()
+    (tmp_path / "taken" / "mine.txt").write_text("x")
+    answers(monkeypatch, "django", "taken", "good-name")
+    assert cli.run(["new"]) == 0
+    out = capsys.readouterr().out
+    assert "clashes" in out and "already exists" in out
+    assert (tmp_path / "good-name" / "manage.py").is_file() and (tmp_path / "taken" / "mine.txt").exists()
+
+
+def test_three_bad_names_in_a_row_give_up(tmp_path, monkeypatch, capsys):
+    answers(monkeypatch, "django", "test", "os")
+    assert cli.run(["new"]) == 1
+    assert "No usable project name" in capsys.readouterr().err and not list(tmp_path.iterdir())
+
+
+def test_without_a_name_and_without_a_terminal_it_says_what_to_type(tmp_path, capsys):
+    assert cli.run(["new"]) == 1
+    assert "Give the project a name" in capsys.readouterr().err and not list(tmp_path.iterdir())
+
+
+def test_inside_a_project_it_refuses_before_asking(tmp_path, monkeypatch, capsys):
+    (tmp_path / "manage.py").write_text("")
+    asked = answers(monkeypatch)
+    assert cli.run(["new"]) == 1
+    assert asked == [] and "already inside a Django project" in capsys.readouterr().err

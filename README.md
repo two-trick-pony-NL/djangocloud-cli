@@ -56,7 +56,7 @@ cd my-shop
 djangocloud deploy
 ```
 
-`new` takes only the name. It looks up the latest Django LTS release, runs Django's own `django-admin startproject` for
+`new` takes only the name, and asks for it if you leave it out (`djangocloud new`). It looks up the latest Django LTS release, runs Django's own `django-admin startproject` for
 it (Django is installed just for that, away from your environment, so it needs a network connection), and creates
 `my-shop/`. Three things differ from a plain `startproject`, plus a short `README.md`:
 
