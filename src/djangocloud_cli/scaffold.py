@@ -194,7 +194,7 @@ ENV_FILE = """# Environment variables for this project. Kept out of git (see .gi
 """
 
 
-DOCS_URL = "https://django-cloud.gitbook.io/django-cloud-docs/"
+DOCS_URL = "https://docs.djangocloud.dev/"
 
 PROJECT_README = """# {name}
 

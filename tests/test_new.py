@@ -92,6 +92,7 @@ def test_the_project_gets_a_short_readme_with_the_commands_that_matter(tmp_path)
     cli.run(["new", "my-shop"])
     readme = (tmp_path / "my-shop" / "README.md").read_text()
     assert readme.startswith("# my-shop") and "Django 5.2 (LTS)" in readme
+    assert "https://docs.djangocloud.dev/" in readme and "gitbook" not in readme
     for text in ("python manage.py runserver", "djangocloud deploy", "djangocloud env push .env",
                  "djangocloud tests on", "my_shop/settings.py", "djangocloud logs -f"):  # fmt: skip
         assert text in readme
