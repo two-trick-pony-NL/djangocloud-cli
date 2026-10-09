@@ -208,3 +208,19 @@ def test_no_input_env_var_works_too(api, monkeypatch, capsys):
     monkeypatch.setenv("DJANGOCLOUD_NO_INPUT", "1")
     assert cli.run(["login"]) == 1
     assert "browser" in capsys.readouterr().err
+
+
+def test_no_command_prints_the_menu_of_commands(capsys):
+    assert cli.run([]) == 0
+    out = capsys.readouterr().out
+    for command in ("login", "deploy", "status", "autoscale", "db", "tests"):
+        assert command in out
+    assert "help' for every command" in out
+    assert "Every command and its options" not in out  # that is what `help` is for
+
+
+@pytest.mark.parametrize(("group", "sub"), [("db", "snapshot"), ("env", "push")])
+def test_a_command_with_subcommands_prints_its_menu_when_given_none(capsys, group, sub):
+    assert cli.run([group]) == 2
+    out = capsys.readouterr().out
+    assert sub in out and "usage:" in out

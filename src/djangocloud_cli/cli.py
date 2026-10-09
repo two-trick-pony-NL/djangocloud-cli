@@ -133,7 +133,8 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
     rollback.add_argument("--no-wait", action="store_true", help="Return as soon as the rollback is queued")
 
     env = sub.add_parser("env", help="Manage a project's environment variables (push them from a file or from CI)")
-    env_sub = env.add_subparsers(dest="env_command", metavar="<push|list>", required=True)
+    env.set_defaults(_menu=env)  # no subcommand: show this menu
+    env_sub = env.add_subparsers(dest="env_command", metavar="<push|list>")
     push = env_sub.add_parser(
         "push",
         help="Set variables from a .env file, or from named variables in the environment (--from-env)",
@@ -186,7 +187,8 @@ def build_parser(prog: str = STANDALONE) -> argparse.ArgumentParser:
     metrics.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
 
     db = sub.add_parser("db", help="The project's database: status, public access, snapshots")
-    db_sub = db.add_subparsers(dest="db_command", metavar="<status|public|snapshot>", required=True)
+    db.set_defaults(_menu=db)
+    db_sub = db.add_subparsers(dest="db_command", metavar="<status|public|snapshot>")
     db_status = db_sub.add_parser("status", help="Show the database: state, size, public access, last snapshot")
     db_status.add_argument("--json", action="store_true", help="Print the raw details as JSON, for scripts")
     db_status.add_argument("--project", help="A project (slug) instead of the one this folder is linked to")
@@ -1306,12 +1308,19 @@ def run(argv: list[str] | None = None, prog: str = STANDALONE) -> int:
     args = parser.parse_args(argv)
     set_no_input(getattr(args, "no_input", False))
 
-    if args.command in (None, "help"):
+    if args.command is None:  # just `djangocloud`: the menu of commands, and where to find everything else
+        sys.stdout.write(parser.format_help() + f"\nRun '{say('help')}' for every command with all of its options.\n")
+        return 0
+    if args.command == "help":
         topic = getattr(args, "topic", None)
         if topic:
             return run([topic, "--help"], prog)  # argparse prints the sub-command's help, then exits
         sys.stdout.write(full_help(parser) + "\n")
         return 0
+    menu = getattr(args, "_menu", None)
+    if menu is not None and not getattr(args, f"{args.command}_command", None):
+        sys.stdout.write(menu.format_help())  # `djangocloud db` on its own: that command's menu, not an error
+        return 2
     handler = COMMANDS.get(args.command)
     if handler is None:
         err.print(COMING_SOON.format(command=say(args.command)))

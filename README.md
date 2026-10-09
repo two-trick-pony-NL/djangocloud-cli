@@ -45,6 +45,9 @@ Deploying my-shop
 
 ## Features
 
+Run `djangocloud` on its own for the menu of commands, `djangocloud help` for every command with all its options, and
+`djangocloud <command>` without a subcommand (for example `djangocloud db`) for that command's own menu.
+
 ### Two ways to run it
 
 **`djangocloud <command>`** works as soon as the package is installed. There is nothing to add to your project, and it
@@ -219,6 +222,10 @@ djangocloud tests --require on   # the project refuses deploys unless their test
 djangocloud test             # run the tests now, the way a deploy would
 djangocloud deploy --skip-tests
 ```
+
+Prefer a switch in the browser? **Settings → Tests before deploys** in the dashboard turns the project's requirement
+on or off (the same as `tests --require`) and shows the last reported result. Whether *this folder* runs tests is the
+`run_tests` setting, which lives with your code.
 
 The settings live in `.djangocloud/config.json` (`run_tests`, `test_command`). The answer to the question is written
 there, so you are asked once. Scripts and CI (`--yes`, no terminal) are never asked. A failing test stops the deploy
