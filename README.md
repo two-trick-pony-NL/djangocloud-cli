@@ -58,7 +58,7 @@ djangocloud deploy
 
 `new` takes only the name. It looks up the latest Django LTS release, runs Django's own `django-admin startproject` for
 it (Django is installed just for that, away from your environment, so it needs a network connection), and creates
-`my-shop/`. Three things differ from a plain `startproject`:
+`my-shop/`. Three things differ from a plain `startproject`, plus a short `README.md`:
 
 - **`DATABASES`**: a local SQLite file on your computer, and the Postgres database DjangoCloud creates for you as soon as
   the app runs there. DjangoCloud adds the `DJANGOCLOUD_HOSTED_DB_*` variables to the deployment when you select and
@@ -68,6 +68,9 @@ it (Django is installed just for that, away from your environment, so it needs a
 
 - **An empty `.env`** (kept out of git, never uploaded with your code) with a comment on how to use it: add `KEY=value`
   lines and send them with `djangocloud env push .env`.
+
+It also writes a short `README.md` for the project: how to run it locally, deploy it, send environment variables and
+connect a database.
 
 Everything else a deployed app needs, such as static files and allowed hosts, DjangoCloud adds when it builds the image.
 When a new LTS comes out, `new` uses it without a CLI update. Inside an existing project the command is not shown, and

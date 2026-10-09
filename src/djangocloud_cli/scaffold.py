@@ -10,7 +10,7 @@ Nothing is bundled and nothing needs updating when Django ships a new LTS:
 4. the DATABASES block of the generated settings.py is replaced: SQLite on your computer, and the Postgres database
    DjangoCloud creates for you as soon as the app runs there (DjangoCloud adds the connection details to the
    deployment's environment when you select and connect a database),
-5. an empty `.env` (just a comment on how to send it with `djangocloud env push .env`) is created, and
+5. a short README.md is written, and an empty `.env` (a comment on sending it with `djangocloud env push .env`), and
 6. `djangocloud_cli` is added to INSTALLED_APPS (so `python manage.py djangocloud <command>` works), and
    `djangocloud-cli` to requirements.txt (the app has to be installed wherever the project runs).
 
@@ -191,6 +191,63 @@ ENV_FILE = """# Environment variables for this project. Kept out of git (see .gi
 """
 
 
+DOCS_URL = "https://django-cloud.gitbook.io/django-cloud-docs/"
+
+PROJECT_README = """# {name}
+
+A Django {series} (LTS) project, ready to deploy with [DjangoCloud](https://djangocloud.dev).
+
+## Run it on your computer
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py runserver
+```
+
+Locally the project uses a SQLite file (`db.sqlite3`), so there is nothing else to set up.
+
+## Deploy it
+
+```bash
+djangocloud deploy
+```
+
+The first time, the CLI signs you in and links this folder to a project. After that it is the same command every
+time. If you want your tests to run before every deploy, switch that on with `djangocloud tests on`.
+
+## Environment variables
+
+Put `KEY=value` lines in `.env` (it is kept out of git and never uploaded with your code), then send them:
+
+```bash
+djangocloud env push .env
+```
+
+They reach your app from the next deploy.
+
+## Database
+
+In the DjangoCloud dashboard, select and connect a database for this project. DjangoCloud then gives your app its
+connection details, and `{package}/settings.py` switches from SQLite to that Postgres database by itself. Nothing to
+copy by hand.
+
+## Handy commands
+
+```bash
+djangocloud status        # is it live, and the latest releases
+djangocloud logs -f       # follow the logs
+djangocloud scale         # change the server size or the number of instances
+djangocloud metrics       # CPU and memory
+djangocloud help          # everything else
+```
+
+Documentation: {docs}
+"""
+
+
 def create(parent: Path, name: str, *, series: str | None = None) -> tuple[Path, str]:
     """Create parent/name. Returns (folder, Django series). Refuses a folder that already has something in it."""
     package = package_name(name)
@@ -205,5 +262,6 @@ def create(parent: Path, name: str, *, series: str | None = None) -> tuple[Path,
     settings.write_text(add_installed_app(patch_settings(settings.read_text())))
     (folder / "requirements.txt").write_text(f"{requirement(series)}\n{cli_requirement()}\n")
     (folder / ".env").write_text(ENV_FILE)
+    (folder / "README.md").write_text(PROJECT_README.format(name=name, series=series, package=package, docs=DOCS_URL))
     (folder / ".gitignore").write_text("__pycache__/\n*.pyc\n.venv/\ndb.sqlite3\n.env\nstaticfiles/\n")
     return folder, series

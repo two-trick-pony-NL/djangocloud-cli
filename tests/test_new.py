@@ -76,6 +76,15 @@ def test_new_runs_djangos_own_startproject_for_the_latest_lts(tmp_path, capsys, 
     assert "db.sqlite3" in (tmp_path / "my-shop" / ".gitignore").read_text()
 
 
+def test_the_project_gets_a_short_readme_with_the_commands_that_matter(tmp_path):
+    cli.run(["new", "my-shop"])
+    readme = (tmp_path / "my-shop" / "README.md").read_text()
+    assert readme.startswith("# my-shop") and "Django 5.2 (LTS)" in readme
+    for text in ("python manage.py runserver", "djangocloud deploy", "djangocloud env push .env",
+                 "djangocloud tests on", "my_shop/settings.py", "djangocloud logs -f"):  # fmt: skip
+        assert text in readme
+
+
 def test_an_empty_env_file_explains_how_to_send_it(tmp_path):
     from djangocloud_cli import envfile
 
