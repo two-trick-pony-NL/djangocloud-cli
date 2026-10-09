@@ -37,23 +37,23 @@ def uploaded_fields(api):
 # ---- djangocloud test ----
 
 
-def test_the_test_command_runs_and_its_output_is_shown(project_dir, capsys, api):
+def test_the_test_command_runs_and_its_output_is_shown(project_dir, capfd, api):
     set_build(project_dir, test_command=PASS)
     assert cli.run(["test"]) == 0
-    out = capsys.readouterr().out
-    assert "all good" in out and "Tests passed" in out
+    out = capfd.readouterr().out
+    assert "all good\n" in out and "Tests passed" in out
 
 
-def test_a_failing_test_command_exits_nonzero(project_dir, capsys, api):
+def test_a_failing_test_command_exits_nonzero(project_dir, capfd, api):
     set_build(project_dir, test_command=FAIL)
     assert cli.run(["test"]) == 1
-    assert "exit 3" in capsys.readouterr().out
+    assert "exit 3" in capfd.readouterr().out
 
 
-def test_extra_arguments_reach_the_command(project_dir, capsys, api):
+def test_extra_arguments_reach_the_command(project_dir, capfd, api):
     set_build(project_dir, test_command=f"{sys.executable} -c 'import sys; print(sys.argv[1:])'")
     assert cli.run(["test", "--", "-k", "login"]) == 0
-    assert "['-k', 'login']" in capsys.readouterr().out
+    assert "['-k', 'login']" in capfd.readouterr().out
 
 
 # ---- deploy ----
