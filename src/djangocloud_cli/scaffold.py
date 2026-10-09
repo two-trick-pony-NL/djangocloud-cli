@@ -10,7 +10,8 @@ Nothing is bundled and nothing needs updating when Django ships a new LTS:
 4. the DATABASES block of the generated settings.py is replaced: SQLite on your computer, and the Postgres database
    DjangoCloud creates for you as soon as the app runs there (DjangoCloud adds the connection details to the
    deployment's environment when you select and connect a database),
-5. `djangocloud_cli` is added to INSTALLED_APPS (so `python manage.py djangocloud <command>` works), and
+5. an empty `.env` (just a comment on how to send it with `djangocloud env push .env`) is created, and
+6. `djangocloud_cli` is added to INSTALLED_APPS (so `python manage.py djangocloud <command>` works), and
    `djangocloud-cli` to requirements.txt (the app has to be installed wherever the project runs).
 
 Nothing else is touched; DjangoCloud adds what a deployed app needs (static files, allowed hosts, the Postgres
@@ -181,6 +182,15 @@ def cli_requirement(version: str = __version__) -> str:
     return "djangocloud-cli>=" + ".".join(found.groups())
 
 
+ENV_FILE = """# Environment variables for this project. This file is kept out of git (see .gitignore) and is never uploaded with
+# your code. Add KEY=value lines below, then send them to DjangoCloud with:
+#
+#     djangocloud env push .env
+#
+# They reach your app from the next deploy. Values are stored encrypted and never shown again.
+"""
+
+
 def create(parent: Path, name: str, *, series: str | None = None) -> tuple[Path, str]:
     """Create parent/name. Returns (folder, Django series). Refuses a folder that already has something in it."""
     package = package_name(name)
@@ -194,5 +204,6 @@ def create(parent: Path, name: str, *, series: str | None = None) -> tuple[Path,
         raise ScaffoldError("Django did not create the expected settings.py.")
     settings.write_text(add_installed_app(patch_settings(settings.read_text())))
     (folder / "requirements.txt").write_text(f"{requirement(series)}\n{cli_requirement()}\n")
+    (folder / ".env").write_text(ENV_FILE)
     (folder / ".gitignore").write_text("__pycache__/\n*.pyc\n.venv/\ndb.sqlite3\n.env\nstaticfiles/\n")
     return folder, series

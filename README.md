@@ -66,6 +66,9 @@ it (Django is installed just for that, away from your environment, so it needs a
 - **`djangocloud_cli`** is in `INSTALLED_APPS` and `djangocloud-cli` in `requirements.txt`, so
   `python manage.py djangocloud <command>` works too.
 
+- **An empty `.env`** (kept out of git, never uploaded with your code) with a comment on how to use it: add `KEY=value`
+  lines and send them with `djangocloud env push .env`.
+
 Everything else a deployed app needs, such as static files and allowed hosts, DjangoCloud adds when it builds the image.
 When a new LTS comes out, `new` uses it without a CLI update. Inside an existing project the command is not shown, and
 refuses to run.

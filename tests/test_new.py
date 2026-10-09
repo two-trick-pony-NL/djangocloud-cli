@@ -76,6 +76,17 @@ def test_new_runs_djangos_own_startproject_for_the_latest_lts(tmp_path, capsys, 
     assert "db.sqlite3" in (tmp_path / "my-shop" / ".gitignore").read_text()
 
 
+def test_an_empty_env_file_explains_how_to_send_it(tmp_path):
+    from djangocloud_cli import envfile
+
+    cli.run(["new", "shop"])
+    env = (tmp_path / "shop" / ".env").read_text()
+    assert "djangocloud env push .env" in env
+    assert all(line.startswith("#") or not line.strip() for line in env.splitlines())  # comments only
+    assert ".env" in (tmp_path / "shop" / ".gitignore").read_text().splitlines()  # kept out of git
+    assert envfile.parse(env) == ({}, [])  # `env push .env` on it sends nothing
+
+
 def test_only_the_database_block_and_our_app_differ_from_djangos_settings(tmp_path):
     cli.run(["new", "shop"])
     text = (tmp_path / "shop" / "shop" / "settings.py").read_text()
