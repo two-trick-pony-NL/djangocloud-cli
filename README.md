@@ -58,7 +58,7 @@ djangocloud deploy
 
 `new` takes only the name. It looks up the latest Django LTS release, runs Django's own `django-admin startproject` for
 it (Django is installed just for that, away from your environment, so it needs a network connection), and creates
-`my-shop/`. Two things differ from a plain `startproject`:
+`my-shop/`. Three things differ from a plain `startproject`:
 
 - **`DATABASES`**: a local SQLite file on your computer, and the Postgres database DjangoCloud creates for you as soon as
   the app runs there. DjangoCloud adds the `DJANGOCLOUD_HOSTED_DB_*` variables to the deployment when you select and

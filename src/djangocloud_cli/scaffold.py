@@ -182,8 +182,8 @@ def cli_requirement(version: str = __version__) -> str:
     return "djangocloud-cli>=" + ".".join(found.groups())
 
 
-ENV_FILE = """# Environment variables for this project. This file is kept out of git (see .gitignore) and is never uploaded with
-# your code. Add KEY=value lines below, then send them to DjangoCloud with:
+ENV_FILE = """# Environment variables for this project. Kept out of git (see .gitignore), never uploaded with your code.
+# Add KEY=value lines below, then send them to DjangoCloud with:
 #
 #     djangocloud env push .env
 #
