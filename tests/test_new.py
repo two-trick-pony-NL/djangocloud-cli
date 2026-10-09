@@ -46,6 +46,7 @@ MANAGE = "os.environ.setdefault('DJANGO_SETTINGS_MODULE', '{name}.settings')\n"
 WSGI = "application = get_wsgi_application()\n"
 
 
+REAL_GENERATE = scaffold.generate
 REAL_LATEST_LTS = scaffold.latest_lts  # the autouse fixture below fakes it for the CLI; these tests need the real one
 
 
@@ -58,7 +59,9 @@ def fake_django(tmp_path, monkeypatch):
 
     def generate(series, package, folder):
         calls.append((series, package, folder))
-        (folder / package).mkdir(parents=True)
+        if not folder.is_dir():  # what the real django-admin does
+            raise scaffold.ScaffoldError(f"CommandError: Destination directory '{folder}' does not exist")
+        (folder / package).mkdir()
         (folder / "manage.py").write_text(MANAGE.format(name=package))
         (folder / package / "__init__.py").write_text("")
         (folder / package / "settings.py").write_text(STOCK_SETTINGS.format(name=package))
@@ -257,3 +260,48 @@ def test_inside_a_linked_folder_it_is_hidden_too(tmp_path, capsys):
 def test_outside_a_project_new_is_listed(tmp_path, capsys):
     assert cli.run([]) == 0
     assert "Create a new Django project" in capsys.readouterr().out
+
+
+def test_the_folder_is_created_in_the_folder_we_are_in_before_django_runs(tmp_path, fake_django):
+    sub = tmp_path / "work"
+    sub.mkdir()
+    os.chdir(sub)
+    assert cli.run(["new", "fresh"]) == 0
+    assert (sub / "fresh" / "manage.py").is_file() and not (tmp_path / "fresh").exists()
+    assert fake_django[-1][2] == sub / "fresh"
+
+
+def test_django_runs_from_the_folder_we_are_in(tmp_path, monkeypatch):
+    seen = {}
+
+    def run(command, **kwargs):
+        seen.update(kwargs)
+
+    monkeypatch.setattr(scaffold.subprocess, "run", run)
+    monkeypatch.setattr(scaffold.shutil, "which", lambda name: "/usr/bin/uvx")
+    monkeypatch.setattr(scaffold, "generate", REAL_GENERATE)
+    (tmp_path / "x").mkdir()
+    REAL_GENERATE("5.2", "x", tmp_path / "x")
+    assert seen["cwd"] == tmp_path
+
+
+def test_a_failure_after_django_ran_removes_the_folder_it_made(tmp_path, monkeypatch, capsys):
+    def odd(series, package, folder):
+        (folder / package).mkdir()
+        (folder / package / "settings.py").write_text("DATABASES = dict()\n")  # not Django's shape
+
+    monkeypatch.setattr(scaffold, "generate", odd)
+    assert cli.run(["new", "shop"]) == 1
+    assert "different DATABASES block" in capsys.readouterr().err and not (tmp_path / "shop").exists()
+
+
+def test_a_failure_in_an_existing_empty_folder_empties_it_again(tmp_path, monkeypatch):
+    (tmp_path / "shop").mkdir()
+
+    def odd(series, package, folder):
+        (folder / package).mkdir()
+        (folder / package / "settings.py").write_text("DATABASES = dict()\n")
+
+    monkeypatch.setattr(scaffold, "generate", odd)
+    assert cli.run(["new", "shop"]) == 1
+    assert (tmp_path / "shop").is_dir() and not list((tmp_path / "shop").iterdir())

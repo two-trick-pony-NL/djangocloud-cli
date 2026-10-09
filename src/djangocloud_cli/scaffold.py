@@ -98,7 +98,7 @@ def generate(series: str, package: str, folder: Path) -> None:
     try:
         if shutil.which("uvx"):
             command = ["uvx", "--quiet", "--from", spec, "django-admin", "startproject", package, str(folder)]
-            subprocess.run(command, check=True, capture_output=True, text=True, timeout=300)  # noqa: S603
+            subprocess.run(command, check=True, capture_output=True, text=True, timeout=300, cwd=folder.parent)  # noqa: S603
             return
         with tempfile.TemporaryDirectory() as tmp:
             venv = Path(tmp) / "venv"
@@ -110,7 +110,7 @@ def generate(series: str, package: str, folder: Path) -> None:
             )  # fmt: skip
             subprocess.run(  # noqa: S603
                 [str(bin_dir / "django-admin"), "startproject", package, str(folder)],
-                check=True, capture_output=True, text=True, timeout=300,
+                check=True, capture_output=True, text=True, timeout=300, cwd=folder.parent,
             )  # fmt: skip
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip().splitlines()[-1:] or [str(exc)]
@@ -253,6 +253,15 @@ Documentation: {docs}
 """
 
 
+def _undo(folder: Path, created: bool) -> None:
+    """Remove what a failed run wrote: the whole folder if we made it, else just what is in it (it was empty)."""
+    if created:
+        shutil.rmtree(folder, ignore_errors=True)
+        return
+    for child in folder.iterdir():
+        shutil.rmtree(child, ignore_errors=True) if child.is_dir() else child.unlink(missing_ok=True)
+
+
 def create(parent: Path, name: str, *, series: str | None = None) -> tuple[Path, str]:
     """Create parent/name. Returns (folder, Django series). Refuses a folder that already has something in it."""
     package = package_name(name)
@@ -260,13 +269,21 @@ def create(parent: Path, name: str, *, series: str | None = None) -> tuple[Path,
     if folder.exists() and (not folder.is_dir() or any(folder.iterdir())):
         raise ScaffoldError(f"{name!r} already exists and isn't empty. Pick another name, or remove it first.")
     series = series or latest_lts()
-    generate(series, package, folder)
-    settings = folder / package / "settings.py"
-    if not settings.is_file():
-        raise ScaffoldError("Django did not create the expected settings.py.")
-    settings.write_text(add_installed_app(patch_settings(settings.read_text())))
-    (folder / "requirements.txt").write_text(f"{requirement(series)}\n{cli_requirement()}\n")
-    (folder / ".env").write_text(ENV_FILE)
-    (folder / "README.md").write_text(PROJECT_README.format(name=name, series=series, package=package, docs=DOCS_URL))
-    (folder / ".gitignore").write_text("__pycache__/\n*.pyc\n.venv/\ndb.sqlite3\n.env\nstaticfiles/\n")
+    created = not folder.exists()
+    folder.mkdir(parents=True, exist_ok=True)  # django-admin wants the folder to exist already
+    try:
+        generate(series, package, folder)
+        settings = folder / package / "settings.py"
+        if not settings.is_file():
+            raise ScaffoldError("Django did not create the expected settings.py.")
+        settings.write_text(add_installed_app(patch_settings(settings.read_text())))
+        (folder / "requirements.txt").write_text(f"{requirement(series)}\n{cli_requirement()}\n")
+        (folder / ".env").write_text(ENV_FILE)
+        (folder / "README.md").write_text(
+            PROJECT_README.format(name=name, series=series, package=package, docs=DOCS_URL)
+        )
+        (folder / ".gitignore").write_text("__pycache__/\n*.pyc\n.venv/\ndb.sqlite3\n.env\nstaticfiles/\n")
+    except BaseException:
+        _undo(folder, created)  # a failed run leaves nothing behind
+        raise
     return folder, series
