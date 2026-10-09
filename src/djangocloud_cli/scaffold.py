@@ -31,7 +31,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import __version__, link
+from . import link
 
 PYPI_DJANGO = "https://pypi.org/pypi/django/json"
 LTS_RELEASE = re.compile(r"^(\d+)\.2\.(\d+)$")  # 4.2.x, 5.2.x ...: every X.2 series is a long-term-support release
@@ -179,12 +179,10 @@ def add_installed_app(text: str) -> str:
     return text.replace(block, block[: -len("]\n")] + f'    "{APP_NAME}",\n]\n', 1)
 
 
-def cli_requirement(version: str = __version__) -> str:
-    """The requirements.txt line for this CLI: at least the version that made the project (unpinned for a checkout)."""
-    found = re.match(r"(\d+)\.(\d+)\.(\d+)", version or "")
-    if not found or found.groups() == ("0", "0", "0"):
-        return "djangocloud-cli"
-    return "djangocloud-cli>=" + ".".join(found.groups())
+def cli_requirement() -> str:
+    """The requirements.txt line for this CLI. Deliberately unpinned: the project only needs the app to import, and
+    a version floor at the version that made it can fail for minutes after a release, while PyPI's mirrors catch up."""
+    return "djangocloud-cli"
 
 
 ENV_FILE = """# Environment variables for this project. Kept out of git (see .gitignore), never uploaded with your code.

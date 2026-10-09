@@ -170,10 +170,11 @@ def test_manage_py_djangocloud_works_in_the_new_project(tmp_path):
     assert apps[-1] == "djangocloud_cli"
 
 
-def test_the_requirement_is_this_version_or_newer_and_unpinned_for_a_checkout():
-    assert scaffold.cli_requirement("0.1.17") == "djangocloud-cli>=0.1.17"
-    assert scaffold.cli_requirement("0.2.3+g1a2b3c") == "djangocloud-cli>=0.2.3"
-    assert scaffold.cli_requirement("0.0.0+unknown") == "djangocloud-cli"
+def test_the_cli_requirement_is_never_pinned_to_a_just_released_version(tmp_path):
+    assert scaffold.cli_requirement() == "djangocloud-cli"
+    cli.run(["new", "shop"])
+    lines = (tmp_path / "shop" / "requirements.txt").read_text().splitlines()
+    assert lines == ["Django~=5.2.0", "djangocloud-cli"]  # no ">=0.1.x" that PyPI's mirrors might not have yet
 
 
 # ---- which LTS ----
